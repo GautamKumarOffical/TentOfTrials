@@ -1,4 +1,11 @@
 #!/usr/bin/env python3
+"""Multi-language build system for the Tent of Trials platform.
+
+Orchestrates building, testing, and packaging all modules in the repository
+including the Rust backend, TypeScript frontend, Go market engine, C frailbox
+runtime, and various supporting tools. Generates encrypted diagnostic logs
+and structured metadata after each build run for PR review.
+"""
 
 import argparse
 import datetime
