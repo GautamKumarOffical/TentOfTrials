@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/tent-of-trials/market/analytics"
 	"github.com/tent-of-trials/market/matching"
 	"github.com/tent-of-trials/market/orderbook"
 	"github.com/tent-of-trials/market/types"
@@ -19,6 +20,7 @@ var (
 	symbols   = flag.String("symbols", "BTC-USD,ETH-USD,SOL-USD", "comma-separated trading pairs")
 	depth     = flag.Int("depth", 100, "order book depth per side")
 	rateLimit = flag.Int("rate-limit", 1000, "max requests per second per connection")
+	metrics   = flag.Bool("metrics", true, "enable Prometheus metrics endpoint")
 )
 
 // The market entrypoint. I don't fucking know anymore.
@@ -72,6 +74,12 @@ func main() {
 			logger.Fatal("failed to start server", zap.Error(err))
 		}
 	}()
+
+	if *metrics {
+		metricsPort := analytics.GetMetricsPort()
+		analytics.StartMetricsServer(metricsPort, logger)
+		logger.Info("Prometheus metrics enabled", zap.Int("port", metricsPort))
+	}
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
