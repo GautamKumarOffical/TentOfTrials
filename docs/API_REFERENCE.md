@@ -248,6 +248,34 @@ Returns market news and announcements.
 
 ---
 
+## Health Endpoints
+
+### GET /health
+
+Returns structured health details for the backend service.
+
+**Response:**
+
+```json
+{
+  "status": "ok",
+  "version": "0.1.0",
+  "commit": "abc123",
+  "uptime_seconds": 86400,
+  "features": ["experimental"]
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `status` | string | Service status (always "ok") |
+| `version` | string | Package version |
+| `commit` | string | Git commit hash (from `GIT_COMMIT` env, or "unknown") |
+| `uptime_seconds` | integer | Seconds since the service started |
+| `features` | array | List of enabled features |
+
+---
+
 ## Order Management Endpoints
 
 ### POST /orders
