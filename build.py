@@ -340,6 +340,47 @@ def check_prerequisites() -> list[str]:
 
     return missing
 
+
+def parse_module_names(module_arg: str) -> list[str]:
+    """Parse comma-separated module names with optional spaces.
+
+    Unit-testable helper function for parsing module selections.
+    """
+    if not module_arg or module_arg.strip() == "":
+        return []
+    names = []
+    for part in module_arg.split(","):
+        stripped = part.strip()
+        if stripped:
+            names.append(stripped)
+    return names
+
+
+def validate_module_names(names: list[str], available_modules: list[Module]) -> tuple[list[Module], list[str]]:
+    """Validate module names against available modules.
+
+    Returns a tuple of (selected_modules, invalid_names).
+    Unit-testable helper function for validating module selections.
+    """
+    valid_map = {m.name: m for m in available_modules}
+    selected = []
+    invalid = []
+    for name in names:
+        if name in valid_map:
+            selected.append(valid_map[name])
+        else:
+            invalid.append(name)
+    return selected, invalid
+
+
+def list_modules() -> None:
+    """Print module name, language, directory, and build command for all modules."""
+    print(f"  {color('Available modules:', Colors.BOLD)}")
+    for m in MODULES:
+        print(f"    {color(m.name, Colors.CYAN)} ({m.language})")
+        print(f"      dir: {m.dir.relative_to(ROOT)}")
+        print(f"      build: {' '.join(m.build_cmd)}")
+
 def build_module(
     module: Module,
     release: bool = False,
@@ -853,6 +894,10 @@ Diagnostic bundle:
         "--list", action="store_true",
         help="List available modules and exit",
     )
+    parser.add_argument(
+        "--list-modules", action="store_true",
+        help="List all available modules with details and exit",
+    )
 
     args = parser.parse_args()
 
@@ -861,11 +906,11 @@ Diagnostic bundle:
     print()
 
     if args.list:
-        print(f"  {color('Available modules:', Colors.BOLD)}")
-        for m in MODULES:
-            print(f"    {color(m.name, Colors.CYAN)} ({m.language})")
-            print(f"      dir: {m.dir.relative_to(ROOT)}")
-            print(f"      build: {' '.join(m.build_cmd)}")
+        list_modules()
+        return 0
+
+    if args.list_modules:
+        list_modules()
         return 0
 
     print(f"  {color('Checking prerequisites...', Colors.GRAY)}")
@@ -882,11 +927,10 @@ Diagnostic bundle:
     if args.module == "all":
         selected = MODULES
     else:
-        names = [n.strip() for n in args.module.split(",")]
-        selected = [m for m in MODULES if m.name in names]
-        not_found = set(names) - {m.name for m in MODULES}
-        if not_found:
-            print(f"  {color('✗ Unknown modules:', Colors.RED)} {', '.join(not_found)}")
+        names = parse_module_names(args.module)
+        selected, invalid_names = validate_module_names(names, MODULES)
+        if invalid_names:
+            print(f"  {color('✗ Unknown modules:', Colors.RED)} {', '.join(invalid_names)}")
             print(f"    Available: {', '.join(m.name for m in MODULES)}")
             return 1
 
