@@ -259,6 +259,7 @@ LEGACY_ENCRYPTLY_BIN = ENCRYPTLY_DIR / "encryptly"
 
 
 def _normalize_arch(machine: str) -> Optional[str]:
+    """Normalize architecture names to a consistent format."""
     machine = machine.lower()
     if machine in {"x86_64", "amd64"}:
         return "x64"
@@ -268,6 +269,7 @@ def _normalize_arch(machine: str) -> Optional[str]:
 
 
 def _normalize_os() -> Optional[str]:
+    """Normalize operating system names to a consistent format."""
     system = platform.system().lower()
     if system == "linux":
         return "linux"
@@ -279,6 +281,7 @@ def _normalize_os() -> Optional[str]:
 
 
 def detect_encryptly_platform() -> Optional[str]:
+    """Detect the current platform as a string like 'linux-x64' for encryptly binary selection."""
     os_name = _normalize_os()
     arch = _normalize_arch(platform.machine())
     if os_name is None or arch is None:
@@ -287,6 +290,7 @@ def detect_encryptly_platform() -> Optional[str]:
 
 
 def get_encryptly_bin() -> Optional[Path]:
+    """Return the path to the encryptly binary for the current platform, or None if not found."""
     target = detect_encryptly_platform()
     if target is not None:
         binary = ENCRYPTLY_BINARIES.get(target)
@@ -300,6 +304,7 @@ def get_encryptly_bin() -> Optional[Path]:
 
 
 def encryptly_platform_help() -> str:
+    """Return a human-readable string showing detected and available encryptly platforms."""
     detected = detect_encryptly_platform() or "unsupported"
     available = ", ".join(sorted(ENCRYPTLY_BINARIES))
     return f"detected {detected}; available: {available}"
@@ -349,6 +354,7 @@ def check_encryptly_runs(timeout: int = 600) -> tuple[bool, str]:
         shutil.rmtree(workspace, ignore_errors=True)
 
 class Colors:
+    """ANSI color codes for terminal output formatting."""
     GREEN = "\033[92m"
     YELLOW = "\033[93m"
     RED = "\033[91m"
@@ -358,11 +364,13 @@ class Colors:
     GRAY = "\033[90m"
 
 def color(text: str, code: str) -> str:
+    """Wrap text with ANSI color codes for terminal output, returning plain text if not a TTY."""
     if not sys.stdout.isatty():
         return text
     return f"{code}{text}{Colors.RESET}"
 
 def check_prerequisites() -> list[str]:
+    """Check which required build tools are missing and return a list of missing prerequisites."""
     required = {
         "cargo": "Rust",
         "npm": "Node.js",
@@ -431,7 +439,7 @@ def build_module(
     release: bool = False,
     verbose: bool = False,
 ) -> tuple[bool, float, str]:
-
+    """Build a single module and return success status, elapsed time, and output."""
     print(f"\n  {color('▸', Colors.CYAN)} Building {color(module.name, Colors.BOLD)} ({module.language})...")
 
     if not module.dir.exists():
@@ -567,6 +575,7 @@ def build_module(
     return success, elapsed, output
 
 def clean_module(module: Module, verbose: bool = False) -> bool:
+    """Clean build artifacts for a module and return True on success."""
     print(f"  {color('▸', Colors.YELLOW)} Cleaning {module.name}...")
     try:
         if not module.dir.exists():
@@ -595,6 +604,7 @@ def clean_module(module: Module, verbose: bool = False) -> bool:
         return False
 
 def verify_binary(module: Module) -> Optional[str]:
+    """Verify the build artifact exists and return its path, or None if not found."""
     if module.build_dir is None:
         return None
     path = module.build_dir
@@ -610,6 +620,7 @@ def verify_binary(module: Module) -> Optional[str]:
     return None
 
 def run_cmd(cmd: list[str], **kwargs) -> tuple[bool, str]:
+    """Run a command and return success status and combined output."""
     try:
         result = run_text_process(
             cmd, capture_output=True, text=True, check=False, **kwargs
@@ -623,6 +634,7 @@ def run_cmd(cmd: list[str], **kwargs) -> tuple[bool, str]:
 
 
 def collect_system_info() -> str:
+    """Collect system diagnostic information including OS, memory, and disk usage."""
     lines = [
         "Tent of Trials - System Diagnostic Snapshot",
         "=" * 50,
@@ -700,6 +712,7 @@ def build_diagnostic_report(
     chunked: bool = False,
     message_blocker: Optional[str] = None,
 ) -> dict:
+    """Build a diagnostic report dictionary from build results and metadata."""
     diagnostic_logd: Optional[str | list[str]]
     if not logd_relpaths:
         diagnostic_logd = None
@@ -756,6 +769,7 @@ def build_diagnostic_report(
 
 
 def write_diagnostic_report(metadata_path: Path, report: dict) -> None:
+    """Write the diagnostic report JSON to disk."""
     metadata_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print(f"    {color('✓', Colors.GREEN)} {metadata_path.relative_to(ROOT)} created")
 
@@ -813,6 +827,7 @@ def generate_logd(
     results: list[tuple[str, bool, float, str, Optional[str]]],
     verbose: bool = False,
 ) -> bool:
+    """Generate the encrypted diagnostic .logd bundle from build results."""
     logd_path, metadata_path, commit_id = diagnostic_paths_for_commit()
     display_logd = logd_path.relative_to(ROOT)
     print(f"\n  {color('▸', Colors.CYAN)} Finalizing diagnostics for {color(str(display_logd), Colors.BOLD)}...")
@@ -1051,6 +1066,7 @@ def generate_logd(
 
 
 def print_summary(results: list[tuple[str, bool, float, str, Optional[str]]]):
+    """Print a formatted summary of build results with pass/fail status and timing."""
     print(f"  {color('Build Summary', Colors.BOLD)}")
 
     total = len(results)
@@ -1080,6 +1096,7 @@ def print_summary(results: list[tuple[str, bool, float, str, Optional[str]]]):
           f"{total_time:.1f}s total")
 
 def main():
+    """Entry point for the Tent of Trials build system."""
     parser = argparse.ArgumentParser(
         description="Tent of Trials  -  Multi-Language Build System",
         formatter_class=argparse.RawDescriptionHelpFormatter,
