@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -14,6 +16,25 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	defaultHeartbeatIntervalSecs = 30
+	defaultIdleMultiplier        = 2
+)
+
+func getHeartbeatInterval() time.Duration {
+	val := os.Getenv("WS_HEARTBEAT_INTERVAL_SECS")
+	if val != "" {
+		if secs, err := strconv.Atoi(val); err == nil && secs > 0 {
+			return time.Duration(secs) * time.Second
+		}
+	}
+	return time.Duration(defaultHeartbeatIntervalSecs) * time.Second
+}
+
+func getReadDeadline(interval time.Duration) time.Duration {
+	return interval * defaultIdleMultiplier
+}
+
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  4096,
 	WriteBufferSize: 4096,
@@ -21,12 +42,14 @@ var upgrader = websocket.Upgrader{
 }
 
 type Client struct {
-	hub      *Hub
-	conn     *websocket.Conn
-	send     chan []byte
-	subs     map[types.Symbol]struct{}
-	remote   string
-	mu       sync.Mutex
+	hub       *Hub
+	conn      *websocket.Conn
+	send      chan []byte
+	subs      map[types.Symbol]struct{}
+	remote    string
+	mu        sync.Mutex
+	lastPong  time.Time
+	connected time.Time
 }
 
 type Hub struct {
@@ -36,6 +59,13 @@ type Hub struct {
 	broadcast  chan []byte
 	logger     *zap.Logger
 	mu         sync.RWMutex
+	activeCount int
+}
+
+func (h *Hub) ActiveCount() int {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.activeCount
 }
 
 type Server struct {
@@ -62,10 +92,12 @@ func (h *Hub) Run() {
 		case client := <-h.register:
 			h.mu.Lock()
 			h.clients[client] = struct{}{}
+			h.activeCount = len(h.clients)
+			count := h.activeCount
 			h.mu.Unlock()
 			h.logger.Info("client connected",
 				zap.String("remote", client.remote),
-				zap.Int("total", len(h.clients)),
+				zap.Int("total", count),
 			)
 
 		case client := <-h.unregister:
@@ -73,11 +105,13 @@ func (h *Hub) Run() {
 			if _, ok := h.clients[client]; ok {
 				delete(h.clients, client)
 				close(client.send)
+				h.activeCount = len(h.clients)
 			}
+			count := h.activeCount
 			h.mu.Unlock()
 			h.logger.Info("client disconnected",
 				zap.String("remote", client.remote),
-				zap.Int("total", len(h.clients)),
+				zap.Int("total", count),
 			)
 
 		case message := <-h.broadcast:
@@ -135,12 +169,15 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	now := time.Now()
 	client := &Client{
-		hub:    s.hub,
-		conn:   conn,
-		send:   make(chan []byte, 256),
-		subs:   make(map[types.Symbol]struct{}),
-		remote: r.RemoteAddr,
+		hub:       s.hub,
+		conn:      conn,
+		send:      make(chan []byte, 256),
+		subs:      make(map[types.Symbol]struct{}),
+		remote:    r.RemoteAddr,
+		lastPong:  now,
+		connected: now,
 	}
 
 	s.hub.register <- client
@@ -152,9 +189,11 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":  "ok",
-		"service": "tent-market",
-		"time":    time.Now().Unix(),
+		"status":         "ok",
+		"service":        "tent-market",
+		"time":           time.Now().Unix(),
+		"active_ws":      s.hub.ActiveCount(),
+		"heartbeat_secs": int(getHeartbeatInterval().Seconds()),
 	})
 }
 
@@ -175,10 +214,16 @@ func (c *Client) readPump() {
 		c.conn.Close()
 	}()
 
+	heartbeatInterval := getHeartbeatInterval()
+	idleDeadline := getReadDeadline(heartbeatInterval)
+
 	c.conn.SetReadLimit(65536)
-	c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	c.conn.SetReadDeadline(time.Now().Add(idleDeadline))
 	c.conn.SetPongHandler(func(string) error {
-		c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		c.mu.Lock()
+		c.lastPong = time.Now()
+		c.mu.Unlock()
+		c.conn.SetReadDeadline(time.Now().Add(idleDeadline))
 		return nil
 	})
 
@@ -200,7 +245,8 @@ func (c *Client) readPump() {
 }
 
 func (c *Client) writePump() {
-	ticker := time.NewTicker(30 * time.Second)
+	heartbeatInterval := getHeartbeatInterval()
+	ticker := time.NewTicker(heartbeatInterval)
 	defer func() {
 		ticker.Stop()
 		c.conn.Close()

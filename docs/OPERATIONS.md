@@ -310,3 +310,63 @@ Audit logs are retained for 365 days and include:
 2. Update Kubernetes secret: `kubectl create secret tls tot-tls --cert=new.crt --key=new.key -n tent-production --dry-run=client -o yaml | kubectl apply -f -`
 3. Restart services: `kubectl rollout restart deployment -n tent-production`
 4. Verify new certificate: `openssl s_client -connect api.example.com:443 -servername api.example.com`
+
+## WebSocket Heartbeat and Idle Disconnects
+
+The WebSocket server implements heartbeat (ping/pong) handling to detect and
+clean up dead connections. This prevents idle clients from consuming server
+resources indefinitely.
+
+### How It Works
+
+1. The server sends a **ping** frame to each connected client at a configurable
+   interval (default: 30 seconds).
+2. The client's pong response resets the idle read deadline.
+3. If a client does not respond with a pong within **two heartbeat intervals**
+   (default: 60 seconds), the connection is closed as idle.
+4. Active connection count and last pong timestamp are tracked per connection.
+
+### Configuration
+
+| Environment Variable | Default | Description |
+|---------------------|---------|-------------|
+| `WS_HEARTBEAT_INTERVAL_SECS` | `30` | Seconds between ping frames |
+
+The idle disconnect threshold is always **2x** the heartbeat interval.
+
+### Examples
+
+```bash
+# Default: ping every 30s, idle timeout at 60s
+WS_HEARTBEAT_INTERVAL_SECS=30
+
+# Aggressive: ping every 10s, idle timeout at 20s
+WS_HEARTBEAT_INTERVAL_SECS=10
+
+# Relaxed: ping every 60s, idle timeout at 120s
+WS_HEARTBEAT_INTERVAL_SECS=60
+```
+
+### Health Endpoint
+
+The `/health` endpoint on the WebSocket server includes heartbeat metadata:
+
+```json
+{
+  "status": "ok",
+  "service": "tent-market",
+  "time": 1718800000,
+  "active_ws": 42,
+  "heartbeat_secs": 30
+}
+```
+
+### Monitoring
+
+Watch for the following log messages:
+
+- `client connected` — new WebSocket connection established
+- `client disconnected` — connection closed (graceful or idle timeout)
+
+A high rate of idle disconnects may indicate clients with flaky network
+connections or clients that do not implement pong responses.
