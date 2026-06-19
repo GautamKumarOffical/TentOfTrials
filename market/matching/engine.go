@@ -20,25 +20,36 @@ type EngineConfig struct {
 }
 
 type MatchingEngine struct {
-	config     EngineConfig
-	books      map[types.Symbol]*orderbook.OrderBook
-	trades     []*types.Trade
-	tradeCount atomic.Int64
-	mu         sync.RWMutex
+	config       EngineConfig
+	books        map[types.Symbol]*orderbook.OrderBook
+	trades       []*types.Trade
+	tradeCount   atomic.Int64
+	orderCounts  map[string]*atomic.Int64
+	latencyCount atomic.Int64
+	latencyNanos atomic.Int64
+	mu           sync.RWMutex
 }
 
 func NewMatchingEngine(config EngineConfig, books map[types.Symbol]*orderbook.OrderBook) *MatchingEngine {
 	return &MatchingEngine{
-		config: config,
-		books:  books,
-		trades: make([]*types.Trade, 0, 10000),
+		config:      config,
+		books:       books,
+		trades:      make([]*types.Trade, 0, 10000),
+		orderCounts: make(map[string]*atomic.Int64),
 	}
 }
 
 func (e *MatchingEngine) PlaceOrder(order *types.Order) ([]*types.Trade, error) {
+	started := time.Now()
+	defer func() {
+		e.latencyCount.Add(1)
+		e.latencyNanos.Add(time.Since(started).Nanoseconds())
+	}()
+
 	if order.ID == "" {
 		order.ID = uuid.New().String()
 	}
+	e.recordOrder(order)
 	order.Status = types.New
 	order.CreatedAt = time.Now()
 	order.UpdatedAt = time.Now()
@@ -82,6 +93,43 @@ func (e *MatchingEngine) GetTradeCount() int64 {
 	return e.tradeCount.Load()
 }
 
+type LatencyMetrics struct {
+	Count      int64
+	SumSeconds float64
+}
+
+func (e *MatchingEngine) GetMatchingLatencyMetrics() LatencyMetrics {
+	return LatencyMetrics{
+		Count:      e.latencyCount.Load(),
+		SumSeconds: float64(e.latencyNanos.Load()) / float64(time.Second),
+	}
+}
+
+func (e *MatchingEngine) GetOrderMetrics() map[string]int64 {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	result := make(map[string]int64, len(e.orderCounts))
+	for key, counter := range e.orderCounts {
+		result[key] = counter.Load()
+	}
+	return result
+}
+
+func (e *MatchingEngine) recordOrder(order *types.Order) {
+	key := order.Type.String() + ":" + order.Side.String()
+
+	e.mu.Lock()
+	counter := e.orderCounts[key]
+	if counter == nil {
+		counter = &atomic.Int64{}
+		e.orderCounts[key] = counter
+	}
+	e.mu.Unlock()
+
+	counter.Add(1)
+}
+
 func (e *MatchingEngine) GetRecentTrades(limit int) []*types.Trade {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -112,9 +160,9 @@ func (e *MatchingEngine) ValidateOrder(order *types.Order) error {
 }
 
 var (
-	ErrSymbolNotFound  = &EngineError{"symbol not found"}
-	ErrInvalidQuantity = &EngineError{"invalid quantity"}
-	ErrInvalidPrice    = &EngineError{"invalid price"}
+	ErrSymbolNotFound   = &EngineError{"symbol not found"}
+	ErrInvalidQuantity  = &EngineError{"invalid quantity"}
+	ErrInvalidPrice     = &EngineError{"invalid price"}
 	ErrShortingDisabled = &EngineError{"shorting disabled"}
 )
 

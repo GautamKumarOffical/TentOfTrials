@@ -10,6 +10,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/tent-of-trials/market/matching"
+	marketmetrics "github.com/tent-of-trials/market/metrics"
 	"github.com/tent-of-trials/market/types"
 	"go.uber.org/zap"
 )
@@ -21,12 +22,12 @@ var upgrader = websocket.Upgrader{
 }
 
 type Client struct {
-	hub      *Hub
-	conn     *websocket.Conn
-	send     chan []byte
-	subs     map[types.Symbol]struct{}
-	remote   string
-	mu       sync.Mutex
+	hub    *Hub
+	conn   *websocket.Conn
+	send   chan []byte
+	subs   map[types.Symbol]struct{}
+	remote string
+	mu     sync.Mutex
 }
 
 type Hub struct {
@@ -39,11 +40,12 @@ type Hub struct {
 }
 
 type Server struct {
-	hub    *Hub
-	engine *matching.MatchingEngine
-	logger *zap.Logger
-	port   int
-	srv    *http.Server
+	hub     *Hub
+	engine  *matching.MatchingEngine
+	logger  *zap.Logger
+	port    int
+	srv     *http.Server
+	metrics *marketmetrics.Exporter
 }
 
 func NewHub(logger *zap.Logger) *Hub {
@@ -104,12 +106,25 @@ func NewServer(hub *Hub, engine *matching.MatchingEngine, logger *zap.Logger, po
 	}
 }
 
+func (h *Hub) ActiveCount() int {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return len(h.clients)
+}
+
+func (s *Server) SetMetricsExporter(exporter *marketmetrics.Exporter) {
+	s.metrics = exporter
+}
+
 func (s *Server) Start() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", s.handleWebSocket)
 	mux.HandleFunc("/health", s.handleHealth)
 	mux.HandleFunc("/api/v1/trades", s.handleGetTrades)
 	mux.HandleFunc("/api/v1/depth", s.handleGetDepth)
+	if s.metrics != nil {
+		mux.HandleFunc("/metrics", s.metrics.Handler())
+	}
 
 	s.srv = &http.Server{
 		Addr:         fmt.Sprintf(":%d", s.port),
