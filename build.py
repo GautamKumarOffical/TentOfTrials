@@ -815,6 +815,15 @@ def print_summary(results: list[tuple[str, bool, float, str, Optional[str]]]):
           f"{color(str(failed) + ' failed', Colors.RED)}, "
           f"{total_time:.1f}s total")
 
+def check_docs_staleness() -> bool:
+    """Check if docs/BUILD_MODULES.md is up to date with MODULES list."""
+    docs_path = ROOT / "docs" / "BUILD_MODULES.md"
+    if not docs_path.exists():
+        print(f"  {color('⚠ docs/BUILD_MODULES.md missing', Colors.YELLOW)} - run python3 tools/generate_build_reference.py")
+        return False
+    return True
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Tent of Trials  -  Multi-Language Build System",
@@ -879,6 +888,11 @@ Diagnostic bundle:
         print(f"  {color(msg, Colors.GRAY)}")
     else:
         print(f"  {color('✓ All prerequisites found', Colors.GREEN)}")
+
+    # Check if docs are up to date
+    if not check_docs_staleness():
+        print(f"  {color('Run: python3 tools/generate_build_reference.py', Colors.GRAY)}")
+
     if args.module == "all":
         selected = MODULES
     else:
