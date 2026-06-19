@@ -33,6 +33,7 @@ Usage:
 import argparse
 import json
 import os
+import platform
 import socket
 import ssl
 import subprocess
@@ -149,24 +150,74 @@ def check_disk_usage(path: str = "/") -> Tuple[str, str, float]:
         return "WARNING", f"Cannot check: {e}", 0
 
 
-def check_memory_usage() -> Tuple[str, str, float]:
+def _get_memory_info_linux() -> Tuple[int, int]:
+    with open("/proc/meminfo") as f:
+        meminfo = {}
+        for line in f:
+            parts = line.split(":")
+            if len(parts) == 2:
+                key = parts[0].strip()
+                value = parts[1].strip().replace(" kB", "")
+                try:
+                    meminfo[key] = int(value) * 1024
+                except ValueError:
+                    pass
+    total = meminfo.get("MemTotal", 0)
+    available = meminfo.get("MemAvailable", 0)
+    return total, available
+
+
+def _get_memory_info_macos() -> Tuple[int, int]:
+    total = 0
+    used = 0
     try:
-        with open("/proc/meminfo") as f:
-            meminfo = {}
-            for line in f:
+        result = subprocess.run(
+            ["sysctl", "-n", "hw.memsize"],
+            capture_output=True, text=True, timeout=5
+        )
+        total = int(result.stdout.strip())
+    except Exception:
+        pass
+    try:
+        result = subprocess.run(
+            ["vm_stat"],
+            capture_output=True, text=True, timeout=5
+        )
+        for line in result.stdout.splitlines():
+            if "Pages active" in line:
                 parts = line.split(":")
                 if len(parts) == 2:
-                    key = parts[0].strip()
-                    value = parts[1].strip().replace(" kB", "")
-                    try:
-                        meminfo[key] = int(value) * 1024
-                    except ValueError:
-                        pass
+                    used = int(parts[1].strip().replace(".", "")) * 4096
+            elif "Pages wired" in line:
+                parts = line.split(":")
+                if len(parts) == 2:
+                    used += int(parts[1].strip().replace(".", "")) * 4096
+    except Exception:
+        pass
+    return total, used if total > 0 else 0, total - used if total > 0 else 0
 
-        total = meminfo.get("MemTotal", 0)
-        available = meminfo.get("MemAvailable", 0)
+
+def check_memory_usage() -> Tuple[str, str, float]:
+    system = platform.system()
+    try:
+        if system == "Linux":
+            total, available = _get_memory_info_linux()
+        elif system == "Darwin":
+            total, used, available = _get_memory_info_macos()
+        elif hasattr(os, "sysconf"):
+            try:
+                total = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+                available = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_AVPHYS_PAGES")
+            except (ValueError, OSError):
+                return "WARNING", "Cannot check: sysconf unavailable", 0
+        else:
+            return "WARNING", "Cannot check: unsupported platform", 0
+
+        if total == 0:
+            return "WARNING", "Cannot check: total memory is 0", 0
+
         used = total - available
-        pct = (used / total) * 100 if total > 0 else 0
+        pct = (used / total) * 100
 
         if pct < MEMORY_THRESHOLD_WARNING:
             return "OK", f"{pct:.1f}% used ({used // (1024**3)}GB/{total // (1024**3)}GB)", pct
@@ -179,19 +230,26 @@ def check_memory_usage() -> Tuple[str, str, float]:
 
 
 def check_load_average() -> Tuple[str, str, float]:
+    system = platform.system()
     try:
-        with open("/proc/loadavg") as f:
-            parts = f.read().strip().split()
-            load = float(parts[0])
-            cpu_count = os.cpu_count() or 1
-            load_pct = (load / cpu_count) * 100
+        if system == "Linux" and os.path.exists("/proc/loadavg"):
+            with open("/proc/loadavg") as f:
+                parts = f.read().strip().split()
+                load = float(parts[0])
+        elif hasattr(os, "getloadavg"):
+            load = os.getloadavg()[0]
+        else:
+            return "WARNING", "Cannot check: no load average source available", 0
 
-            if load_pct < 70:
-                return "OK", f"Load: {load} ({load_pct:.0f}% of {cpu_count} cores)", load
-            elif load_pct < 90:
-                return "WARNING", f"Load: {load} ({load_pct:.0f}% of {cpu_count} cores)", load
-            else:
-                return "CRITICAL", f"Load: {load} ({load_pct:.0f}% of {cpu_count} cores)", load
+        cpu_count = os.cpu_count() or 1
+        load_pct = (load / cpu_count) * 100
+
+        if load_pct < 70:
+            return "OK", f"Load: {load} ({load_pct:.0f}% of {cpu_count} cores)", load
+        elif load_pct < 90:
+            return "WARNING", f"Load: {load} ({load_pct:.0f}% of {cpu_count} cores)", load
+        else:
+            return "CRITICAL", f"Load: {load} ({load_pct:.0f}% of {cpu_count} cores)", load
     except Exception as e:
         return "WARNING", f"Cannot check: {e}", 0
 
