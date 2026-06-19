@@ -1,0 +1,87 @@
+{
+  "generated_at": "2026-06-17T10:56:21.264928+00:00",
+  "commit": "62be7990",
+  "diagnostic_logd": "diagnostic/build-62be7990.logd",
+  "diagnostic_logd_error": null,
+  "message_blocker": null,
+  "chunked": false,
+  "chunk_size_bytes": null,
+  "password": "7472742f4fd4512dffdf",
+  "decrypt_command": "encryptly unpack diagnostic/build-62be7990.logd <outdir> --password 7472742f4fd4512dffdf",
+  "total_modules": 10,
+  "passed": 2,
+  "failed": 8,
+  "modules": [
+    {
+      "name": "backend",
+      "status": "FAIL",
+      "elapsed_seconds": 0,
+      "artifact": null,
+      "output": "Command not found: [Errno 2] No such file or directory: 'cargo'"
+    },
+    {
+      "name": "frontend",
+      "status": "FAIL",
+      "elapsed_seconds": 0,
+      "artifact": null,
+      "output": "Command not found: [Errno 2] No such file or directory: 'npm'"
+    },
+    {
+      "name": "market",
+      "status": "PASS",
+      "elapsed_seconds": 14.686,
+      "artifact": "/src/market/market",
+      "output": "go: downloading go.uber.org/zap v1.27.0\ngo: downloading github.com/shopspring/decimal v1.4.0\ngo: downloading github.com/gorilla/websocket v1.5.3\ngo: downloading github.com/google/uuid v1.6.0\ngo: downloading github.com/prometheus/client_golang v1.23.2\ngo: downloading go.uber.org/multierr v1.10.0\ngo: downloading github.com/prometheus/common v0.66.1\ngo: downloading github.com/cespare/xxhash/v2 v2.3.0\ngo: downloading google.golang.org/protobuf v1.36.8\ngo: downloading github.com/prometheus/client_model v0.6.2\ngo: downloading github.com/beorn7/perks v1.0.1\ngo: downloading github.com/prometheus/procfs v0.16.1\ngo: downloading go.yaml.in/yaml/v2 v2.4.2\ngo: downloading github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822\ngo: downloading golang.org/x/sys v0.35.0"
+    },
+    {
+      "name": "frailbox",
+      "status": "PASS",
+      "elapsed_seconds": 0.042,
+      "artifact": "/src/frailbox/frailbox",
+      "output": "make: Nothing to be done for 'all'."
+    },
+    {
+      "name": "engine",
+      "status": "FAIL",
+      "elapsed_seconds": 0,
+      "artifact": null,
+      "output": "Command not found: [Errno 2] No such file or directory: 'cmake'"
+    },
+    {
+      "name": "compliance",
+      "status": "FAIL",
+      "elapsed_seconds": 0,
+      "artifact": null,
+      "output": "Command not found: [Errno 2] No such file or directory: 'javac'"
+    },
+    {
+      "name": "v2-market-stream",
+      "status": "FAIL",
+      "elapsed_seconds": 0,
+      "artifact": null,
+      "output": "Command not found: [Errno 2] No such file or directory: 'ruby'"
+    },
+    {
+      "name": "nfc-scanner",
+      "status": "FAIL",
+      "elapsed_seconds": 0,
+      "artifact": null,
+      "output": "Command not found: [Errno 2] No such file or directory: 'luac'"
+    },
+    {
+      "name": "openapi-haskell",
+      "status": "FAIL",
+      "elapsed_seconds": 0,
+      "artifact": null,
+      "output": "Command not found: [Errno 2] No such file or directory: 'ghc'"
+    },
+    {
+      "name": "openapi-tools",
+      "status": "FAIL",
+      "elapsed_seconds": 0,
+      "artifact": null,
+      "output": "Command not found: [Errno 2] No such file or directory: 'luac'"
+    }
+  ],
+  "pr_note": "Include the encrypted diagnostic logd artifact(s): diagnostic/build-62be7990.logd. The encrypted .logd is the required diagnostic content for PR review; this JSON file is metadata. Maintainers may ask you to remove these diagnostic artifacts before merging."
+}

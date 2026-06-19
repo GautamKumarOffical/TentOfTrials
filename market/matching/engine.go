@@ -17,6 +17,13 @@ type EngineConfig struct {
 	EnableShorting   bool
 	FeeRate          string
 	MakerFeeRate     string
+	Metrics          MetricsRecorder
+}
+
+type MetricsRecorder interface {
+	RecordOrder(orderType string, side string)
+	RecordTrades(count int)
+	ObserveMatchingLatency(duration time.Duration)
 }
 
 type MatchingEngine struct {
@@ -24,18 +31,27 @@ type MatchingEngine struct {
 	books      map[types.Symbol]*orderbook.OrderBook
 	trades     []*types.Trade
 	tradeCount atomic.Int64
+	metrics    MetricsRecorder
 	mu         sync.RWMutex
 }
 
 func NewMatchingEngine(config EngineConfig, books map[types.Symbol]*orderbook.OrderBook) *MatchingEngine {
 	return &MatchingEngine{
-		config: config,
-		books:  books,
-		trades: make([]*types.Trade, 0, 10000),
+		config:  config,
+		books:   books,
+		trades:  make([]*types.Trade, 0, 10000),
+		metrics: config.Metrics,
 	}
 }
 
 func (e *MatchingEngine) PlaceOrder(order *types.Order) ([]*types.Trade, error) {
+	start := time.Now()
+	defer func() {
+		if e.metrics != nil {
+			e.metrics.ObserveMatchingLatency(time.Since(start))
+		}
+	}()
+
 	if order.ID == "" {
 		order.ID = uuid.New().String()
 	}
@@ -51,6 +67,11 @@ func (e *MatchingEngine) PlaceOrder(order *types.Order) ([]*types.Trade, error) 
 	trades, err := book.AddOrder(order)
 	if err != nil {
 		return nil, err
+	}
+
+	if e.metrics != nil {
+		e.metrics.RecordOrder(order.Type.String(), order.Side.String())
+		e.metrics.RecordTrades(len(trades))
 	}
 
 	order.Status = types.Filled
@@ -112,9 +133,9 @@ func (e *MatchingEngine) ValidateOrder(order *types.Order) error {
 }
 
 var (
-	ErrSymbolNotFound  = &EngineError{"symbol not found"}
-	ErrInvalidQuantity = &EngineError{"invalid quantity"}
-	ErrInvalidPrice    = &EngineError{"invalid price"}
+	ErrSymbolNotFound   = &EngineError{"symbol not found"}
+	ErrInvalidQuantity  = &EngineError{"invalid quantity"}
+	ErrInvalidPrice     = &EngineError{"invalid price"}
 	ErrShortingDisabled = &EngineError{"shorting disabled"}
 )
 

@@ -21,12 +21,12 @@ var upgrader = websocket.Upgrader{
 }
 
 type Client struct {
-	hub      *Hub
-	conn     *websocket.Conn
-	send     chan []byte
-	subs     map[types.Symbol]struct{}
-	remote   string
-	mu       sync.Mutex
+	hub    *Hub
+	conn   *websocket.Conn
+	send   chan []byte
+	subs   map[types.Symbol]struct{}
+	remote string
+	mu     sync.Mutex
 }
 
 type Hub struct {
@@ -62,22 +62,25 @@ func (h *Hub) Run() {
 		case client := <-h.register:
 			h.mu.Lock()
 			h.clients[client] = struct{}{}
+			total := len(h.clients)
 			h.mu.Unlock()
 			h.logger.Info("client connected",
 				zap.String("remote", client.remote),
-				zap.Int("total", len(h.clients)),
+				zap.Int("total", total),
 			)
 
 		case client := <-h.unregister:
 			h.mu.Lock()
+			total := len(h.clients)
 			if _, ok := h.clients[client]; ok {
 				delete(h.clients, client)
 				close(client.send)
+				total = len(h.clients)
 			}
 			h.mu.Unlock()
 			h.logger.Info("client disconnected",
 				zap.String("remote", client.remote),
-				zap.Int("total", len(h.clients)),
+				zap.Int("total", total),
 			)
 
 		case message := <-h.broadcast:
@@ -93,6 +96,12 @@ func (h *Hub) Run() {
 			h.mu.RUnlock()
 		}
 	}
+}
+
+func (h *Hub) ActiveConnections() int {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return len(h.clients)
 }
 
 func NewServer(hub *Hub, engine *matching.MatchingEngine, logger *zap.Logger, port int) *Server {
