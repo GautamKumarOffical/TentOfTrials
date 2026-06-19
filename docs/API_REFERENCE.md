@@ -94,6 +94,44 @@ Common error codes:
 
 ---
 
+## Operations Endpoints
+
+### GET /metrics
+
+Returns Prometheus text-format metrics for the market gateway. By default, the market service exposes this endpoint on `METRICS_PORT` when set, otherwise port `9090`. Operators can disable it with `--metrics=false` or bind it to the main service port with `--metrics-port`.
+
+The endpoint intentionally exposes only build metadata and aggregate service counters; it does not dump environment variables, request payloads, API keys, or account data.
+
+**Example response:**
+
+```text
+# HELP market_gateway_info Static build and feature information for the market gateway.
+# TYPE market_gateway_info gauge
+market_gateway_info{version="0.1.0",commit="unknown",features="prometheus,rest,websocket"} 1
+# HELP market_gateway_uptime_seconds Seconds since the market gateway started.
+# TYPE market_gateway_uptime_seconds gauge
+market_gateway_uptime_seconds 42
+# HELP market_orders_total Total orders submitted to the matching engine.
+# TYPE market_orders_total counter
+market_orders_total{type="limit",side="buy"} 12
+# HELP market_trades_total Total trades recorded by the matching engine.
+# TYPE market_trades_total counter
+market_trades_total 8
+# HELP market_active_connections Current active WebSocket client connections.
+# TYPE market_active_connections gauge
+market_active_connections 3
+# HELP market_orderbook_depth Number of price levels currently held per symbol and side.
+# TYPE market_orderbook_depth gauge
+market_orderbook_depth{symbol="BTC-USD",side="bid"} 24
+market_orderbook_depth{symbol="BTC-USD",side="ask"} 19
+# HELP market_matching_latency_seconds Matching engine order placement latency in seconds.
+# TYPE market_matching_latency_seconds summary
+market_matching_latency_seconds_count 12
+market_matching_latency_seconds_sum 0.034
+```
+
+---
+
 ## Market Data Endpoints
 
 ### GET /market/instruments

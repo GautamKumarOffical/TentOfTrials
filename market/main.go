@@ -3,11 +3,15 @@ package main
 import (
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
+	"time"
 
 	"github.com/tent-of-trials/market/matching"
+	marketmetrics "github.com/tent-of-trials/market/metrics"
 	"github.com/tent-of-trials/market/orderbook"
 	"github.com/tent-of-trials/market/types"
 	"github.com/tent-of-trials/market/ws"
@@ -15,10 +19,12 @@ import (
 )
 
 var (
-	port      = flag.Int("port", 9000, "WebSocket server port")
-	symbols   = flag.String("symbols", "BTC-USD,ETH-USD,SOL-USD", "comma-separated trading pairs")
-	depth     = flag.Int("depth", 100, "order book depth per side")
-	rateLimit = flag.Int("rate-limit", 1000, "max requests per second per connection")
+	port           = flag.Int("port", 9000, "WebSocket server port")
+	symbols        = flag.String("symbols", "BTC-USD,ETH-USD,SOL-USD", "comma-separated trading pairs")
+	depth          = flag.Int("depth", 100, "order book depth per side")
+	rateLimit      = flag.Int("rate-limit", 1000, "max requests per second per connection")
+	metricsEnabled = flag.Bool("metrics", true, "enable Prometheus /metrics endpoint")
+	metricsPort    = flag.Int("metrics-port", envInt("METRICS_PORT", 9090), "Prometheus metrics port")
 )
 
 // The market entrypoint. I don't fucking know anymore.
@@ -35,17 +41,17 @@ func main() {
 	)
 
 	bookConfig := orderbook.Config{
-		MaxDepth:      *depth,
-		PriceDecimals: 8,
+		MaxDepth:       *depth,
+		PriceDecimals:  8,
 		VolumeDecimals: 8,
 	}
 
 	engineConfig := matching.EngineConfig{
-		OrderTimeoutMs: 30000,
+		OrderTimeoutMs:   30000,
 		MaxPendingOrders: 10000,
-		EnableShorting:  true,
-		FeeRate:         "0.001",
-		MakerFeeRate:    "0.0005",
+		EnableShorting:   true,
+		FeeRate:          "0.001",
+		MakerFeeRate:     "0.0005",
 	}
 
 	books := make(map[types.Symbol]*orderbook.OrderBook)
@@ -66,6 +72,20 @@ func main() {
 	go hub.Run()
 
 	server := ws.NewServer(hub, engine, logger, *port)
+	metricsExporter := marketmetrics.NewExporter(marketmetrics.Config{
+		Engine:            engine,
+		Books:             books,
+		Started:           time.Now(),
+		Commit:            os.Getenv("GIT_COMMIT"),
+		Features:          []string{"prometheus", "rest", "websocket"},
+		ActiveConnections: hub.ActiveCount,
+	})
+	if *metricsEnabled && *metricsPort == *port {
+		server.SetMetricsExporter(metricsExporter)
+	}
+	if *metricsEnabled && *metricsPort != *port {
+		go startMetricsServer(logger, metricsExporter, *metricsPort)
+	}
 	go func() {
 		logger.Info("starting WebSocket server", zap.Int("port", *port))
 		if err := server.Start(); err != nil {
@@ -111,4 +131,34 @@ func parseSymbols(s string) []types.Symbol {
 	}
 	fmt.Printf("market: configured symbols %v\n", result)
 	return result
+}
+
+func envInt(name string, fallback int) int {
+	value := os.Getenv(name)
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed <= 0 {
+		return fallback
+	}
+	return parsed
+}
+
+func startMetricsServer(logger *zap.Logger, exporter *marketmetrics.Exporter, port int) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/metrics", exporter.Handler())
+
+	server := &http.Server{
+		Addr:         fmt.Sprintf(":%d", port),
+		Handler:      mux,
+		ReadTimeout:  5 * time.Second,
+		WriteTimeout: 5 * time.Second,
+		IdleTimeout:  30 * time.Second,
+	}
+
+	logger.Info("starting Prometheus metrics server", zap.Int("port", port))
+	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		logger.Error("metrics server stopped", zap.Error(err))
+	}
 }
