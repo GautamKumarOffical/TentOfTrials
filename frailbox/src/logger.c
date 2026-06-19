@@ -379,10 +379,10 @@ int log_init(void)
     if (env_log_file != NULL && strlen(env_log_file) > 0) {
         g_log_file = fopen(env_log_file, "a");
         if (g_log_file == NULL) {
-            fprintf(stderr, "Failed to open log file '%s': %s\n",
-                    env_log_file, strerror(errno));
             /* Fall back to stderr */
             g_log_file = stderr;
+            LOG_ERROR("Failed to open log file '%s': %s",
+                      env_log_file, strerror(errno));
         }
     } else {
         g_log_file = stderr;
@@ -560,7 +560,7 @@ void log_shutdown(void)
 
     pthread_mutex_unlock(&log_mutex);
 
-    fprintf(stderr, "Legacy logging subsystem shut down.\n");
+    LOG_INFO("Legacy logging subsystem shut down.");
 }
 
 /**
@@ -582,21 +582,14 @@ int log_dump_ring_buffer(int fd)
     int count = g_ring_buffer.count;
     int idx = g_ring_buffer.tail;
 
-    char ring_buf[65536];
-    int written = 0;
-    written += snprintf(ring_buf + written, sizeof(ring_buf) - written,
-        "=== RING BUFFER DUMP (%d entries) ===\n", count);
+    LOG_INFO("=== RING BUFFER DUMP (%d entries) ===", count);
 
-    for (int i = 0; i < count && written < (int)sizeof(ring_buf) - 256; i++) {
-        written += snprintf(ring_buf + written, sizeof(ring_buf) - written,
-            "%s\n", g_ring_buffer.entries[idx]);
+    for (int i = 0; i < count; i++) {
+        LOG_INFO("%s", g_ring_buffer.entries[idx]);
         idx = (idx + 1) % RING_BUFFER_SIZE;
     }
 
-    written += snprintf(ring_buf + written, sizeof(ring_buf) - written,
-        "=== END RING BUFFER DUMP ===\n");
-    ssize_t _written = write(fd, ring_buf, written);
-    (void)_written;  // suppress unused-result warning. the ring buffer dump is best-effort.
+    LOG_INFO("=== END RING BUFFER DUMP ===");
 
     pthread_mutex_unlock(&g_ring_buffer.ring_mutex);
     return count;
