@@ -106,7 +106,10 @@ func (ob *OrderBook) GetBids() []*types.Level {
 	defer ob.mu.RUnlock()
 
 	result := make([]*types.Level, len(ob.bids))
-	copy(result, ob.bids)
+	for i, l := range ob.bids {
+		cpy := *l
+		result[i] = &cpy
+	}
 	return result
 }
 
@@ -115,7 +118,10 @@ func (ob *OrderBook) GetAsks() []*types.Level {
 	defer ob.mu.RUnlock()
 
 	result := make([]*types.Level, len(ob.asks))
-	copy(result, ob.asks)
+	for i, l := range ob.asks {
+		cpy := *l
+		result[i] = &cpy
+	}
 	return result
 }
 
@@ -168,6 +174,13 @@ func (e *BookError) Error() string {
 }
 
 func insertLevel(levels []*types.Level, level *types.Level, desc bool) []*types.Level {
+	for _, l := range levels {
+		if l.Price.Equal(level.Price) {
+			l.Quantity = l.Quantity.Add(level.Quantity)
+			l.Count++
+			return levels
+		}
+	}
 	levels = append(levels, level)
 	sort.Slice(levels, func(i, j int) bool {
 		if desc {

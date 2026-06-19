@@ -39,6 +39,15 @@ func (e *MatchingEngine) PlaceOrder(order *types.Order) ([]*types.Trade, error) 
 	if order.ID == "" {
 		order.ID = uuid.New().String()
 	}
+
+	if err := e.ValidateOrder(order); err != nil {
+		return nil, err
+	}
+
+	if order.ExpireAt != nil && order.ExpireAt.Before(time.Now()) {
+		return nil, ErrOrderExpired
+	}
+
 	order.Status = types.New
 	order.CreatedAt = time.Now()
 	order.UpdatedAt = time.Now()
@@ -53,9 +62,15 @@ func (e *MatchingEngine) PlaceOrder(order *types.Order) ([]*types.Trade, error) 
 		return nil, err
 	}
 
-	order.Status = types.Filled
-	order.FilledQty = order.Quantity
-	order.RemainingQty = decimal.Zero
+	if len(trades) > 0 {
+		order.Status = types.Filled
+		order.FilledQty = order.Quantity
+		order.RemainingQty = decimal.Zero
+	} else {
+		order.Status = types.New
+		order.FilledQty = decimal.Zero
+		order.RemainingQty = order.Quantity
+	}
 	order.UpdatedAt = time.Now()
 
 	for _, trade := range trades {
@@ -116,6 +131,7 @@ var (
 	ErrInvalidQuantity = &EngineError{"invalid quantity"}
 	ErrInvalidPrice    = &EngineError{"invalid price"}
 	ErrShortingDisabled = &EngineError{"shorting disabled"}
+	ErrOrderExpired    = &EngineError{"order expired"}
 )
 
 type EngineError struct {
