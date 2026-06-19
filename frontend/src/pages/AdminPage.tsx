@@ -30,6 +30,7 @@
  */
 
 import React, { useState, useCallback, useEffect, useMemo } from 'react';
+import { ErrorBoundary } from '../components/ErrorBoundary';
 
 // ---------------------------------------------------------------------------
 // TYPES
@@ -618,4 +619,12 @@ export function AdminPage() {
   );
 }
 
-export default AdminPage;
+function AdminPageWithErrorBoundary() {
+  return (
+    <ErrorBoundary>
+      <AdminPage />
+    </ErrorBoundary>
+  );
+}
+
+export default AdminPageWithErrorBoundary;

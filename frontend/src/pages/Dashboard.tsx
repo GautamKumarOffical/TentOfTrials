@@ -1,4 +1,5 @@
 import React from 'react';
+import { ErrorBoundary } from '../components/ErrorBoundary';
 import { useDashboardStats } from '../hooks';
 
 const statCards = [
@@ -78,4 +79,12 @@ const Dashboard: React.FC = () => {
   );
 };
 
-export default Dashboard;
+function DashboardWithErrorBoundary() {
+  return (
+    <ErrorBoundary>
+      <Dashboard />
+    </ErrorBoundary>
+  );
+}
+
+export default DashboardWithErrorBoundary;

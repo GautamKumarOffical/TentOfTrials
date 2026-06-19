@@ -31,6 +31,7 @@
 import React, { useState, useCallback, useEffect, useMemo } from 'react';
 import { OrderBook } from '../components/OrderBook';
 import { TradingChart } from '../components/TradingChart';
+import { ErrorBoundary } from '../components/ErrorBoundary';
 import { useMarketData } from '../hooks/useMarketData';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { getDataService } from '../utils/dataService';
@@ -632,4 +633,12 @@ export function TradePage() {
   );
 }
 
-export default TradePage;
+function TradePageWithErrorBoundary() {
+  return (
+    <ErrorBoundary>
+      <TradePage />
+    </ErrorBoundary>
+  );
+}
+
+export default TradePageWithErrorBoundary;
