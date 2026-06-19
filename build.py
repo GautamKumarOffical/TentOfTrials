@@ -118,7 +118,10 @@ def split_diagnostic_logd(logd_path: Path, chunk_size: int = DIAGNOSTIC_CHUNK_SI
                     return [logd_path]
                 index += 1
 
-        logd_path.unlink()
+        try:
+            logd_path.unlink()
+        except OSError as e:
+            print(f"    {color('⚠', Colors.YELLOW)} Could not remove original {logd_path.name}: {e}")
         return chunks
     except OSError as e:
         print(f"    {color('✗', Colors.RED)} Failed to split diagnostic log: {e}")
