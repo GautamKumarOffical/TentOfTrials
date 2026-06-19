@@ -87,24 +87,42 @@ def diagnostic_paths_for_commit() -> tuple[Path, Path, str]:
 
 def split_diagnostic_logd(logd_path: Path, chunk_size: int = DIAGNOSTIC_CHUNK_SIZE) -> list[Path]:
     """Split an oversized .logd into numbered .logd chunks and remove the original."""
-    if logd_path.stat().st_size <= chunk_size:
-        return [logd_path]
+    try:
+        if not logd_path.exists():
+            print(f"    {color('✗', Colors.RED)} Cannot split: {logd_path.name} does not exist")
+            return [logd_path]
 
-    chunks: list[Path] = []
-    stem = logd_path.stem
-    with logd_path.open("rb") as source:
-        index = 1
-        while True:
-            data = source.read(chunk_size)
-            if not data:
-                break
-            chunk_path = logd_path.with_name(f"{stem}-part{index:03d}.logd")
-            chunk_path.write_bytes(data)
-            chunks.append(chunk_path)
-            index += 1
+        file_size = logd_path.stat().st_size
+        if file_size <= chunk_size:
+            return [logd_path]
 
-    logd_path.unlink()
-    return chunks
+        chunks: list[Path] = []
+        stem = logd_path.stem
+        with logd_path.open("rb") as source:
+            index = 1
+            while True:
+                data = source.read(chunk_size)
+                if not data:
+                    break
+                chunk_path = logd_path.with_name(f"{stem}-part{index:03d}.logd")
+                try:
+                    chunk_path.write_bytes(data)
+                    chunks.append(chunk_path)
+                except OSError as e:
+                    print(f"    {color('✗', Colors.RED)} Failed to write chunk {index}: {e}")
+                    for chunk in chunks:
+                        try:
+                            chunk.unlink()
+                        except OSError:
+                            pass
+                    return [logd_path]
+                index += 1
+
+        logd_path.unlink()
+        return chunks
+    except OSError as e:
+        print(f"    {color('✗', Colors.RED)} Failed to split diagnostic log: {e}")
+        return [logd_path] if logd_path.exists() else []
 
 
 @dataclass
@@ -413,9 +431,15 @@ def build_module(
 
     print(f"\n  {color('▸', Colors.CYAN)} Building {color(module.name, Colors.BOLD)} ({module.language})...")
 
+    if not module.dir.exists():
+        return False, 0, f"Module directory does not exist: {module.dir}"
+
     env = os.environ.copy()
     if module.env:
-        env.update(module.env)
+        try:
+            env.update(module.env)
+        except Exception as e:
+            print(f"       {color('⚠', Colors.YELLOW)} Could not set module env vars: {e}")
 
     start = time.time()
 
@@ -448,6 +472,10 @@ def build_module(
                     f"cwd: {relative_path(module.dir)}\n"
                     f"command: {format_command(install_cmd)}"
                 )
+            except FileNotFoundError as e:
+                return False, time.time() - start, f"npm not found: {e}"
+            except OSError as e:
+                return False, time.time() - start, f"npm install OS error: {e}"
 
     if module.name == "engine":
 
@@ -474,6 +502,8 @@ def build_module(
         except FileNotFoundError as e:
             output = command_error_diagnostic(module, cfg_cmd, e)
             return False, 0, f"Command not found:\n{output}"
+        except OSError as e:
+            return False, 0, f"CMake configure OS error: {e}"
         if cfg_result.returncode != 0:
             output = command_diagnostic(
                 module,
@@ -516,6 +546,8 @@ def build_module(
     except FileNotFoundError as e:
         output = command_error_diagnostic(module, cmd, e)
         return False, 0, f"Command not found:\n{output}"
+    except OSError as e:
+        return False, 0, f"Build command OS error: {e}"
 
     elapsed = time.time() - start
     output = command_diagnostic(
@@ -534,6 +566,9 @@ def build_module(
 def clean_module(module: Module, verbose: bool = False) -> bool:
     print(f"  {color('▸', Colors.YELLOW)} Cleaning {module.name}...")
     try:
+        if not module.dir.exists():
+            print(f"    {color('⚠', Colors.YELLOW)} Module directory does not exist: {module.dir}")
+            return False
         run_text_process(
             module.clean_cmd,
             cwd=str(module.dir),
@@ -543,6 +578,15 @@ def clean_module(module: Module, verbose: bool = False) -> bool:
             env=os.environ.copy(),
         )
         return True
+    except subprocess.TimeoutExpired:
+        print(f"    {color('✗', Colors.RED)} Clean TIMEOUT (60s)")
+        return False
+    except FileNotFoundError as e:
+        print(f"    {color('✗', Colors.RED)} Clean command not found: {e}")
+        return False
+    except OSError as e:
+        print(f"    {color('✗', Colors.RED)} Clean OS error: {e}")
+        return False
     except Exception as e:
         print(f"    {color('✗', Colors.RED)} Clean failed: {e}")
         return False
@@ -579,16 +623,41 @@ def collect_system_info() -> str:
     lines = [
         "Tent of Trials - System Diagnostic Snapshot",
         "=" * 50,
-        f"generated_at: {datetime.datetime.now(datetime.timezone.utc).isoformat()}",
-        f"hostname: {platform.node()}",
-        f"user: {getpass.getuser()}",
-        f"python: {sys.version}",
-        f"platform: {platform.platform()}",
-        f"processor: {platform.processor() or 'unknown'}",
-        f"cpu_count: {os.cpu_count()}",
-        "",
-        "--- uname ---",
     ]
+
+    try:
+        lines.append(f"generated_at: {datetime.datetime.now(datetime.timezone.utc).isoformat()}")
+    except Exception as e:
+        lines.append(f"generated_at: unavailable ({e})")
+
+    try:
+        lines.append(f"hostname: {platform.node()}")
+    except Exception as e:
+        lines.append(f"hostname: unavailable ({e})")
+
+    try:
+        lines.append(f"user: {getpass.getuser()}")
+    except Exception as e:
+        lines.append(f"user: unavailable ({e})")
+
+    lines.append(f"python: {sys.version}")
+
+    try:
+        lines.append(f"platform: {platform.platform()}")
+    except Exception as e:
+        lines.append(f"platform: unavailable ({e})")
+
+    try:
+        lines.append(f"processor: {platform.processor() or 'unknown'}")
+    except Exception as e:
+        lines.append(f"processor: unavailable ({e})")
+
+    try:
+        lines.append(f"cpu_count: {os.cpu_count()}")
+    except Exception as e:
+        lines.append(f"cpu_count: unavailable ({e})")
+
+    lines.extend(["", "--- uname ---"])
     ok, out = run_cmd(["uname", "-a"])
     lines.append(out if ok else "unavailable")
 
@@ -608,9 +677,12 @@ def collect_system_info() -> str:
 
     lines.extend(["", "--- build environment ---"])
     for key in ["SHELL", "LANG", "TERM", "XDG_SESSION_TYPE", "DISPLAY", "EDITOR"]:
-        value = os.environ.get(key)
-        if value:
-            lines.append(f"{key}={value}")
+        try:
+            value = os.environ.get(key)
+            if value:
+                lines.append(f"{key}={value}")
+        except Exception:
+            pass
 
     lines.append("")
     return "\n".join(lines)
@@ -745,23 +817,30 @@ def generate_logd(
     # Always write the JSON report first. The encrypted .logd is useful, but the
     # report is required even when the build failed before compilation started or
     # when encryptly itself is unavailable.
-    write_diagnostic_report(metadata_path, build_diagnostic_report(results, commit_id))
+    try:
+        write_diagnostic_report(metadata_path, build_diagnostic_report(results, commit_id))
+    except Exception as e:
+        print(f"    {color('✗', Colors.RED)} Failed to write initial diagnostic report: {e}")
+        return False
 
     encryptly_bin = get_encryptly_bin()
     if encryptly_bin is None:
         error = f"encryptly binary not found ({encryptly_platform_help()}); cannot create {display_logd}"
         print(f"    {color('✗', Colors.RED)} {error}")
-        write_diagnostic_report(
-            metadata_path,
-            build_diagnostic_report(
-                results,
-                commit_id,
-                logd_error=error,
-                message_blocker=ENCRYPTLY_BLOCKER_MESSAGE,
-            ),
-        )
-        print(f"    {color('BLOCKER', Colors.RED)} {ENCRYPTLY_BLOCKER_MESSAGE}")
-        commit_diagnostic_artifacts([metadata_path], commit_id)
+        try:
+            write_diagnostic_report(
+                metadata_path,
+                build_diagnostic_report(
+                    results,
+                    commit_id,
+                    logd_error=error,
+                    message_blocker=ENCRYPTLY_BLOCKER_MESSAGE,
+                ),
+            )
+            print(f"    {color('BLOCKER', Colors.RED)} {ENCRYPTLY_BLOCKER_MESSAGE}")
+            commit_diagnostic_artifacts([metadata_path], commit_id)
+        except Exception as write_err:
+            print(f"    {color('✗', Colors.RED)} Failed to write error report: {write_err}")
         return False
 
     # Workspace must live under $HOME because encryptly refuses paths outside home.
@@ -773,9 +852,12 @@ def generate_logd(
         shutil.rmtree(workspace, ignore_errors=True)
         safe_dir.mkdir(parents=True, exist_ok=True)
 
-        (safe_dir / "system-info.txt").write_text(
-            collect_system_info(), encoding="utf-8"
-        )
+        try:
+            (safe_dir / "system-info.txt").write_text(
+                collect_system_info(), encoding="utf-8"
+            )
+        except OSError as e:
+            print(f"    {color('⚠', Colors.YELLOW)} Could not write system info: {e}")
 
         summary_lines = [
             "Tent of Trials - Build Summary",
@@ -792,9 +874,12 @@ def generate_logd(
                 f"  {name}: {'PASS' if success else 'FAIL'} ({elapsed:.2f}s)"
                 f"{f' [{binary}]' if binary else ''}"
             )
-        (safe_dir / "build-summary.txt").write_text(
-            "\n".join(summary_lines), encoding="utf-8"
-        )
+        try:
+            (safe_dir / "build-summary.txt").write_text(
+                "\n".join(summary_lines), encoding="utf-8"
+            )
+        except OSError as e:
+            print(f"    {color('⚠', Colors.YELLOW)} Could not write build summary: {e}")
 
         log_lines = []
         for name, success, elapsed, output, binary in results:
@@ -806,23 +891,64 @@ def generate_logd(
                 log_lines.append(f"artifact: {binary}")
             if output:
                 log_lines.append(output)
-        (safe_dir / "build.log").write_text("\n".join(log_lines), encoding="utf-8")
+        try:
+            (safe_dir / "build.log").write_text("\n".join(log_lines), encoding="utf-8")
+        except OSError as e:
+            print(f"    {color('⚠', Colors.YELLOW)} Could not write build log: {e}")
 
-        sr = run_text_process(
-            [
-                str(encryptly_bin),
-                "pack",
-                str(logd_path),
-                "--include",
-                str(workspace),
-                "--max-file-size",
-                "61440",
-            ],
-            cwd=str(ROOT),
-            capture_output=True,
-            text=True,
-            timeout=1500,
-        )
+        try:
+            sr = subprocess.run(
+                [
+                    str(encryptly_bin),
+                    "pack",
+                    str(logd_path),
+                    "--include",
+                    str(workspace),
+                    "--max-file-size",
+                    "35840",
+                ],
+                cwd=str(ROOT),
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+        except subprocess.TimeoutExpired:
+            error = "encryptly pack TIMEOUT (300s)"
+            print(f"    {color('✗', Colors.RED)} {logd_path.relative_to(ROOT)} creation failed: {error}")
+            if logd_path.exists():
+                logd_path.unlink()
+            try:
+                write_diagnostic_report(
+                    metadata_path,
+                    build_diagnostic_report(results, commit_id, logd_error=error),
+                )
+            except Exception as write_err:
+                print(f"    {color('✗', Colors.RED)} Failed to write error report: {write_err}")
+            return False
+        except FileNotFoundError as e:
+            error = f"encryptly binary not found: {e}"
+            print(f"    {color('✗', Colors.RED)} {logd_path.relative_to(ROOT)} creation failed: {error}")
+            try:
+                write_diagnostic_report(
+                    metadata_path,
+                    build_diagnostic_report(results, commit_id, logd_error=error),
+                )
+            except Exception as write_err:
+                print(f"    {color('✗', Colors.RED)} Failed to write error report: {write_err}")
+            return False
+        except OSError as e:
+            error = f"encryptly execution failed: {e}"
+            print(f"    {color('✗', Colors.RED)} {logd_path.relative_to(ROOT)} creation failed: {error}")
+            try:
+                write_diagnostic_report(
+                    metadata_path,
+                    build_diagnostic_report(results, commit_id, logd_error=error),
+                )
+            except Exception as write_err:
+                print(f"    {color('✗', Colors.RED)} Failed to write error report: {write_err}")
+            return False
+
+
         if sr.returncode != 0:
             error = sr.stderr.strip() or sr.stdout.strip() or "encryptly pack failed"
             print(
@@ -831,40 +957,62 @@ def generate_logd(
             )
             if logd_path.exists():
                 logd_path.unlink()
+            try:
+                write_diagnostic_report(
+                    metadata_path,
+                    build_diagnostic_report(
+                        results,
+                        commit_id,
+                        logd_error=error,
+                        message_blocker=ENCRYPTLY_BLOCKER_MESSAGE,
+                    ),
+                )
+                print(f"    {color('BLOCKER', Colors.RED)} {ENCRYPTLY_BLOCKER_MESSAGE}")
+                commit_diagnostic_artifacts([metadata_path], commit_id)
+            except Exception as write_err:
+                print(f"    {color('✗', Colors.RED)} Failed to write error report: {write_err}")
+            return False
+
+        safe_pw = sr.stdout.strip()
+        logd_files = split_diagnostic_logd(logd_path)
+        if not logd_files:
+            error = "failed to split diagnostic log into chunks"
+            print(f"    {color('✗', Colors.RED)} {error}")
+            try:
+                write_diagnostic_report(
+                    metadata_path,
+                    build_diagnostic_report(results, commit_id, logd_error=error),
+                )
+            except Exception as write_err:
+                print(f"    {color('✗', Colors.RED)} Failed to write error report: {write_err}")
+            return False
+
+        logd_relpaths = [str(path.relative_to(ROOT)) for path in logd_files]
+        decrypt_target = logd_relpaths[0] if len(logd_relpaths) == 1 else str(logd_path.relative_to(ROOT))
+        try:
             write_diagnostic_report(
                 metadata_path,
                 build_diagnostic_report(
                     results,
                     commit_id,
-                    logd_error=error,
-                    message_blocker=ENCRYPTLY_BLOCKER_MESSAGE,
+                    logd_relpaths=logd_relpaths,
+                    password=safe_pw,
+                    chunked=len(logd_files) > 1,
                 ),
             )
-            print(f"    {color('BLOCKER', Colors.RED)} {ENCRYPTLY_BLOCKER_MESSAGE}")
-            commit_diagnostic_artifacts([metadata_path], commit_id)
+        except Exception as e:
+            print(f"    {color('✗', Colors.RED)} Failed to write final diagnostic report: {e}")
             return False
 
-        safe_pw = sr.stdout.strip()
-        logd_files = split_diagnostic_logd(logd_path)
-        logd_relpaths = [str(path.relative_to(ROOT)) for path in logd_files]
-        decrypt_target = logd_relpaths[0] if len(logd_relpaths) == 1 else str(logd_path.relative_to(ROOT))
-        write_diagnostic_report(
-            metadata_path,
-            build_diagnostic_report(
-                results,
-                commit_id,
-                logd_relpaths=logd_relpaths,
-                password=safe_pw,
-                chunked=len(logd_files) > 1,
-            ),
-        )
-
         for path in logd_files:
-            size_kb = path.stat().st_size / 1024.0
-            print(
-                f"    {color('✓', Colors.GREEN)} {path.relative_to(ROOT)} created "
-                f"({size_kb:.1f} KiB)"
-            )
+            try:
+                size_kb = path.stat().st_size / 1024.0
+                print(
+                    f"    {color('✓', Colors.GREEN)} {path.relative_to(ROOT)} created "
+                    f"({size_kb:.1f} KiB)"
+                )
+            except OSError as e:
+                print(f"    {color('⚠', Colors.YELLOW)} Could not stat {path.name}: {e}")
         if len(logd_files) > 1:
             print(
                 f"    {color('✓', Colors.GREEN)} split oversized diagnostic log into "
@@ -885,6 +1033,16 @@ def generate_logd(
             print(f"  {color(f'encryptly unpack {decrypt_target} <outdir> --password {safe_pw}', Colors.GRAY)}")
         return True
 
+    except Exception as e:
+        print(f"    {color('✗', Colors.RED)} Unexpected error during diagnostic generation: {e}")
+        try:
+            write_diagnostic_report(
+                metadata_path,
+                build_diagnostic_report(results, commit_id, logd_error=f"unexpected error: {e}"),
+            )
+        except Exception:
+            pass
+        return False
     finally:
         shutil.rmtree(workspace, ignore_errors=True)
 
@@ -957,7 +1115,13 @@ Diagnostic bundle:
         help="List available modules and exit",
     )
 
-    args = parser.parse_args()
+    try:
+        args = parser.parse_args()
+    except SystemExit:
+        raise
+    except Exception as e:
+        print(f"\n  {color('✗', Colors.RED)} Failed to parse arguments: {e}")
+        return 1
 
     print(f"\n  {color('Tent of Trials: building', Colors.CYAN)}")
     print(f"  Working directory: {ROOT}")
@@ -994,8 +1158,13 @@ Diagnostic bundle:
 
     if args.clean:
         print(f"\n  {color('Cleaning build artifacts...', Colors.YELLOW)}")
+        clean_errors = []
         for module in selected:
-            clean_module(module, args.verbose)
+            try:
+                clean_module(module, args.verbose)
+            except Exception as e:
+                clean_errors.append((module.name, str(e)))
+                print(f"    {color('✗', Colors.RED)} Error cleaning {module.name}: {e}")
 
         diagnostic_artifacts = [ROOT / "build.logd"]
         if DIAGNOSTIC_DIR.exists():
@@ -1004,12 +1173,15 @@ Diagnostic bundle:
             diagnostic_artifacts.extend(DIAGNOSTIC_DIR.glob("build-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f].json"))
             diagnostic_artifacts.extend(DIAGNOSTIC_DIR.glob("build-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]-metadata.json"))
         for artifact in diagnostic_artifacts:
-            if artifact.exists():
-                if artifact.is_dir():
-                    shutil.rmtree(artifact)
-                else:
-                    artifact.unlink()
-                print(f"  {color('▸', Colors.YELLOW)} Removed {artifact.relative_to(ROOT)}")
+            try:
+                if artifact.exists():
+                    if artifact.is_dir():
+                        shutil.rmtree(artifact)
+                    else:
+                        artifact.unlink()
+                    print(f"  {color('▸', Colors.YELLOW)} Removed {artifact.relative_to(ROOT)}")
+            except OSError as e:
+                print(f"  {color('⚠', Colors.YELLOW)} Could not remove {artifact.name}: {e}")
         print(f"\n  {color('Clean complete.', Colors.GREEN)}")
         return 0
 
@@ -1031,15 +1203,30 @@ Diagnostic bundle:
     results: list[tuple[str, bool, float, str, Optional[str]]] = []
 
     for module in selected:
-        success, elapsed, output = build_module(module, args.release, args.verbose)
-        binary = verify_binary(module) if success else None
-        results.append((module.name, success, elapsed, output, binary))
+        try:
+            success, elapsed, output = build_module(module, args.release, args.verbose)
+            binary = verify_binary(module) if success else None
+            results.append((module.name, success, elapsed, output, binary))
+        except Exception as e:
+            print(f"    {color('✗', Colors.RED)} Unexpected error building {module.name}: {e}")
+            results.append((module.name, False, 0, f"Unexpected error: {e}", None))
 
     print_summary(results)
 
-    diagnostics_ok = generate_logd(results, args.verbose)
+    try:
+        diagnostics_ok = generate_logd(results, args.verbose)
+    except Exception as e:
+        print(f"\n  {color('✗', Colors.RED)} Diagnostic generation failed: {e}")
+        diagnostics_ok = False
 
     return 0 if diagnostics_ok and all(r[1] for r in results) else 1
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        print(f"\n\n  {color('✗', Colors.RED)} Build interrupted by user")
+        sys.exit(130)
+    except Exception as e:
+        print(f"\n  {color('✗', Colors.RED)} Fatal error: {e}")
+        sys.exit(1)
