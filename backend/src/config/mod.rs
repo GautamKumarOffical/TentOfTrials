@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -89,6 +89,47 @@ impl Default for RootConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnvConfig {
+    pub host: String,
+    pub port: u16,
+    pub log_level: String,
+    pub enable_experimental: bool,
+}
+
+impl EnvConfig {
+    pub fn from_env() -> Result<Self> {
+        let host = std::env::var("TOT_BACKEND_HOST")
+            .unwrap_or_else(|_| "0.0.0.0".into());
+
+        let port = std::env::var("TOT_BACKEND_PORT")
+            .unwrap_or_else(|_| "8080".into())
+            .parse::<u16>()
+            .context("Invalid TOT_BACKEND_PORT: must be a valid port number (1-65535)")?;
+
+        let log_level = std::env::var("TOT_LOG_LEVEL")
+            .unwrap_or_else(|_| "info".into());
+
+        let enable_experimental = std::env::var("TOT_ENABLE_EXPERIMENTAL")
+            .map(|v| match v.to_lowercase().as_str() {
+                "true" | "1" | "yes" => Ok(true),
+                "false" | "0" | "no" => Ok(false),
+                _ => Err(anyhow::anyhow!(
+                    "Invalid TOT_ENABLE_EXPERIMENTAL value '{}': must be true/false, 1/0, or yes/no",
+                    v
+                )),
+            })
+            .unwrap_or(Ok(false))?;
+
+        Ok(Self {
+            host,
+            port,
+            log_level,
+            enable_experimental,
+        })
+    }
+}
+
 pub async fn load_config(path: &str) -> Result<RootConfig> {
     let path = Path::new(path);
     if path.exists() {
@@ -102,5 +143,81 @@ pub async fn load_config(path: &str) -> Result<RootConfig> {
             path.display()
         );
         Ok(RootConfig::default())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::env;
+
+    #[test]
+    fn test_env_config_defaults() {
+        env::remove_var("TOT_BACKEND_HOST");
+        env::remove_var("TOT_BACKEND_PORT");
+        env::remove_var("TOT_LOG_LEVEL");
+        env::remove_var("TOT_ENABLE_EXPERIMENTAL");
+
+        let config = EnvConfig::from_env().unwrap();
+        assert_eq!(config.host, "0.0.0.0");
+        assert_eq!(config.port, 8080);
+        assert_eq!(config.log_level, "info");
+        assert!(!config.enable_experimental);
+    }
+
+    #[test]
+    fn test_env_config_valid_overrides() {
+        env::set_var("TOT_BACKEND_HOST", "127.0.0.1");
+        env::set_var("TOT_BACKEND_PORT", "9090");
+        env::set_var("TOT_LOG_LEVEL", "debug");
+        env::set_var("TOT_ENABLE_EXPERIMENTAL", "true");
+
+        let config = EnvConfig::from_env().unwrap();
+        assert_eq!(config.host, "127.0.0.1");
+        assert_eq!(config.port, 9090);
+        assert_eq!(config.log_level, "debug");
+        assert!(config.enable_experimental);
+
+        env::remove_var("TOT_BACKEND_HOST");
+        env::remove_var("TOT_BACKEND_PORT");
+        env::remove_var("TOT_LOG_LEVEL");
+        env::remove_var("TOT_ENABLE_EXPERIMENTAL");
+    }
+
+    #[test]
+    fn test_env_config_invalid_port() {
+        env::set_var("TOT_BACKEND_PORT", "invalid");
+        let result = EnvConfig::from_env();
+        assert!(result.is_err());
+        env::remove_var("TOT_BACKEND_PORT");
+    }
+
+    #[test]
+    fn test_env_config_port_out_of_range() {
+        env::set_var("TOT_BACKEND_PORT", "99999");
+        let result = EnvConfig::from_env();
+        assert!(result.is_err());
+        env::remove_var("TOT_BACKEND_PORT");
+    }
+
+    #[test]
+    fn test_env_config_invalid_boolean() {
+        env::set_var("TOT_ENABLE_EXPERIMENTAL", "maybe");
+        let result = EnvConfig::from_env();
+        assert!(result.is_err());
+        env::remove_var("TOT_ENABLE_EXPERIMENTAL");
+    }
+
+    #[test]
+    fn test_env_config_boolean_variants() {
+        env::set_var("TOT_ENABLE_EXPERIMENTAL", "1");
+        assert!(EnvConfig::from_env().unwrap().enable_experimental);
+        env::set_var("TOT_ENABLE_EXPERIMENTAL", "yes");
+        assert!(EnvConfig::from_env().unwrap().enable_experimental);
+        env::set_var("TOT_ENABLE_EXPERIMENTAL", "false");
+        assert!(!EnvConfig::from_env().unwrap().enable_experimental);
+        env::set_var("TOT_ENABLE_EXPERIMENTAL", "0");
+        assert!(!EnvConfig::from_env().unwrap().enable_experimental);
+        env::remove_var("TOT_ENABLE_EXPERIMENTAL");
     }
 }

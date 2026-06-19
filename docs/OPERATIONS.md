@@ -13,6 +13,39 @@
 > The known issues from the migration are tracked in the "K8s Migration Known
 > Issues" spreadsheet which is linked from the team's shared drive.
 
+## Configuration
+
+### Environment Variables
+
+The backend supports the following environment variables for configuration:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TOT_BACKEND_HOST` | `0.0.0.0` | Bind address for the backend server |
+| `TOT_BACKEND_PORT` | `8080` | Port for the backend server (must be 1-65535) |
+| `TOT_LOG_LEVEL` | `info` | Log level (trace, debug, info, warn, error) |
+| `TOT_ENABLE_EXPERIMENTAL` | `false` | Enable experimental features (true/false, 1/0, yes/no) |
+| `GIT_COMMIT` | `unknown` | Git commit hash for health endpoint |
+
+**Example:**
+
+```bash
+TOT_BACKEND_HOST=127.0.0.1
+TOT_BACKEND_PORT=9090
+TOT_LOG_LEVEL=debug
+TOT_ENABLE_EXPERIMENTAL=true
+```
+
+### Configuration File
+
+The backend can also be configured via a TOML file. If no file is found at the
+specified path, defaults are used. Environment variables override file values.
+
+```bash
+# Use a custom config file
+tent-backend --config /etc/tent/config.toml
+```
+
 ## Monitoring
 
 ### Health Check Endpoints
