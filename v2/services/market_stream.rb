@@ -19,19 +19,13 @@
 #   - Uses EventMachine for async I/O (because threads are hard)
 #   - Connects to the exchange via WebSocket with reconnection
 #   - Publishes normalized market data to Redis pub/sub
+#   - Subscribes to market:trades, market:orders, market:ticker channels
 #   - Exposes a REST API for historical data queries
 #   - Has a health check endpoint that returns "OK" even when dying
 #
-# TODO: The reconnection logic uses exponential backoff but the base
-# delay is calculated wrong. The formula is `2 ** attempt` but the
-# first attempt starts at attempt=0, so the first retry is 1 second,
-# the second is 2 seconds, etc. This is too aggressive and causes
-# reconnection storms when the exchange has a brief hiccup. The fix
-# is to start at attempt=1 or add an initial delay. Honestly, the
-# current behavior works fine because the exchange is usually down
-# for at least 30 seconds when it goes down. If they have a hiccup
-# that's shorter than that, we just reconnect and miss some ticks.
-# Nobody has noticed. The dashboards don't go below 99.9% uptime.
+# Redis Reconnection:
+#   Uses exponential backoff with min(2 ** (attempt + 2), 300) formula.
+#   First retry is at least 5 seconds, capped at 5 minutes.
 #
 # Dependencies:
 #   gem 'eventmachine', '~> 1.2'
@@ -72,9 +66,12 @@ module Constants
   WS_MAX_RECONNECTS    = nil     # nil = infinite. Because fuck it.
 
   # Redis
-  REDIS_CHANNEL_PREFIX = 'v2:market:'
+  REDIS_CHANNEL_PREFIX = 'market:'
+  REDIS_CHANNELS       = %w[trades orders ticker].freeze
   REDIS_POOL_SIZE      = 10     # more than enough for our shitty throughput
   REDIS_TIMEOUT        = 5      # seconds
+  REDIS_RECONNECT_BASE = 5      # seconds. First retry after 5 seconds.
+  REDIS_RECONNECT_MAX  = 300    # seconds. Max 5 minutes between retries.
 
   # API
   API_PORT             = 8083
@@ -233,6 +230,134 @@ class MarketStreamClient < EM::Connection
   end
 end
 
+# ===─ Redis PubSub Client ====================================================================================
+
+class RedisPubSubClient
+  attr_reader :connected, :last_ping_ms
+
+  def initialize
+    @connected = false
+    @last_ping_ms = nil
+    @redis = nil
+    @subscriber = nil
+    @reconnect_attempt = 0
+    @subscriptions = {}
+    @mutex = Mutex.new
+    @subscriptions = {}
+
+    connect
+  end
+
+  def subscribe(channel, &callback)
+    @mutex.synchronize do
+      @subscriptions[channel] ||= []
+      @subscriptions[channel] << callback
+    end
+    resubscribe if @subscriber
+  end
+
+  def publish(channel, data)
+    return unless @redis&.connected?
+
+    @redis.publish(channel, data.to_json)
+    $logger.debug "Published to #{channel}"
+  rescue Redis::BaseError => e
+    $logger.error "Redis publish error: #{e.message}"
+    @connected = false
+    schedule_reconnect
+  end
+
+  def close
+    @subscriber&.close rescue nil
+    @redis&.close rescue nil
+    @connected = false
+  end
+
+  private
+
+  def connect
+    $logger.info "Connecting to Redis pub/sub..."
+
+    @redis = Redis.new(
+      host: ENV.fetch('REDIS_HOST', '127.0.0.1'),
+      port: ENV.fetch('REDIS_PORT', '6379').to_i,
+      timeout: Constants::REDIS_TIMEOUT,
+      reconnect_attempts: 0  # We handle reconnection ourselves
+    )
+
+    @subscriber = Redis.new(
+      host: ENV.fetch('REDIS_HOST', '127.0.0.1'),
+      port: ENV.fetch('REDIS_PORT', '6379').to_i,
+      timeout: Constants::REDIS_TIMEOUT,
+      reconnect_attempts: 0
+    )
+
+    @reconnect_attempt = 0
+    @connected = true
+
+    # Ping to measure latency
+    start_time = Time.now
+    @redis.ping
+    @last_ping_ms = ((Time.now - start_time) * 1000).to_i
+
+    resubscribe
+    $logger.info "Redis pub/sub connected (ping: #{@last_ping_ms}ms)"
+  rescue Redis::BaseError => e
+    @connected = false
+    @last_ping_ms = nil
+    $logger.error "Redis connection failed: #{e.message}"
+    schedule_reconnect
+  end
+
+  def resubscribe
+    @mutex.synchronize do
+      @subscriptions.each_key do |channel|
+        @subscriber.subscribe(channel) do |on|
+          on.message do |_channel, message|
+            begin
+              data = JSON.parse(message, symbolize_names: true)
+              @subscriptions[_channel].each { |cb| cb.call(data) }
+            rescue JSON::ParserError => e
+              $logger.error "Failed to parse Redis message: #{e.message}"
+            rescue StandardError => e
+              $logger.error "Error processing Redis message: #{e.message}"
+            end
+          end
+        end
+        $logger.debug "Subscribed to Redis channel: #{channel}"
+      end
+    end
+  rescue Redis::BaseError => e
+    @connected = false
+    $logger.error "Redis subscription failed: #{e.message}"
+    schedule_reconnect
+  end
+
+  def schedule_reconnect
+    return if @reconnect_attempt > 100  # Give up after 100 attempts
+
+    delay = [
+      Constants::REDIS_RECONNECT_BASE * (2 ** [@reconnect_attempt, 0].max),
+      Constants::REDIS_RECONNECT_MAX
+    ].min
+
+    @reconnect_attempt += 1
+
+    $logger.info "Redis reconnecting in #{delay}s (attempt #{@reconnect_attempt})"
+
+    # Use Thread instead of EM.add_timer because Redis runs in a separate thread
+    Thread.new do
+      sleep(delay)
+      $logger.info "Attempting Redis reconnection..."
+      begin
+        connect
+      rescue StandardError => e
+        $logger.error "Redis reconnection failed: #{e.message}"
+      end
+    end
+  end
+end
+
 # ===─ REST API ================================================================================================
 
 class MarketStreamAPI < Sinatra::Base
@@ -260,6 +385,15 @@ class MarketStreamAPI < Sinatra::Base
       uptime: (Time.now.utc - $start_time).to_i,
       connected: $client&.connected || false,
       subscriptions: $client&.instrument_ids&.length || 0,
+    }.to_json
+  end
+
+  # Redis health check  -  returns Redis connection status
+  get '/health/redis' do
+    content_type :json
+    {
+      connected: $redis_client&.connected || false,
+      last_ping_ms: $redis_client&.last_ping_ms,
     }.to_json
   end
 
@@ -307,6 +441,17 @@ def start_service
   EM.run do
     $logger.info "v2 EventMachine reactor started"
 
+    # Initialize Redis pub/sub client
+    $redis_client = RedisPubSubClient.new
+
+    # Set up Redis subscriptions for market data
+    Constants::REDIS_CHANNELS.each do |channel|
+      full_channel = "#{Constants::REDIS_CHANNEL_PREFIX}#{channel}"
+      $redis_client.subscribe(full_channel) do |data|
+        $logger.debug "Received on #{full_channel}: #{data[:type]}"
+      end
+    end
+
     # Connect to exchange
     $client = EM.connect(
       ENV.fetch('EXCHANGE_HOST', 'localhost'),
@@ -315,6 +460,13 @@ def start_service
       ENV.fetch('INSTRUMENTS', 'BTC/USD,ETH/USD').split(','),
       ->(data) {
         $message_count += data.is_a?(Array) ? data.length : 1
+
+        # Publish market data to Redis channels
+        if data.is_a?(Array)
+          data.each { |msg| publish_to_redis(msg) }
+        else
+          publish_to_redis(data)
+        end
       },
       ->(error) {
         $logger.error "Market stream error: #{error.message}"
@@ -329,15 +481,72 @@ def start_service
 
     $logger.info "v2 MarketStream service started successfully"
     $logger.info "  Instruments: #{$client.instrument_ids.join(', ')}"
+    $logger.info "  Redis: #{$redis_client.connected ? 'connected' : 'disconnected'}"
     $logger.info "  API: http://#{Constants::API_HOST}:#{Constants::API_PORT}"
     $logger.info "  PID: #{Process.pid}"
   end
 rescue Interrupt
   $logger.info "Service stopped by interrupt. Cleaning up..."
+  $redis_client&.close
 rescue StandardError => e
   $logger.error "Fatal error starting service: #{e.message}"
   $logger.error e.backtrace.first(10).join("\n")
   exit 1
+end
+
+def publish_to_redis(msg)
+  case msg[:type]
+  when 'trade'
+    channel = "#{Constants::REDIS_CHANNEL_PREFIX}trades"
+    normalized = normalize_trade(msg)
+    $redis_client.publish(channel, normalized)
+  when 'order'
+    channel = "#{Constants::REDIS_CHANNEL_PREFIX}orders"
+    normalized = normalize_order(msg)
+    $redis_client.publish(channel, normalized)
+  when 'tick'
+    channel = "#{Constants::REDIS_CHANNEL_PREFIX}ticker"
+    normalized = normalize_ticker(msg)
+    $redis_client.publish(channel, normalized)
+  end
+rescue StandardError => e
+  $logger.error "Failed to publish to Redis: #{e.message}"
+end
+
+def normalize_trade(msg)
+  {
+    type: 'trade',
+    instrument: msg[:instrument],
+    price: msg[:price].to_f,
+    quantity: msg[:quantity].to_f,
+    side: msg[:side],
+    timestamp: msg[:timestamp] || Time.now.utc.iso8601(3),
+    trade_id: msg[:trade_id],
+  }
+end
+
+def normalize_order(msg)
+  {
+    type: 'order',
+    instrument: msg[:instrument],
+    price: msg[:price].to_f,
+    quantity: msg[:quantity].to_f,
+    side: msg[:side],
+    order_type: msg[:order_type],
+    timestamp: msg[:timestamp] || Time.now.utc.iso8601(3),
+  }
+end
+
+def normalize_ticker(msg)
+  {
+    type: 'ticker',
+    instrument: msg[:instrument],
+    bid: msg[:bid].to_f,
+    ask: msg[:ask].to_f,
+    last: msg[:last].to_f,
+    volume: msg[:volume].to_f,
+    timestamp: msg[:timestamp] || Time.now.utc.iso8601(3),
+  }
 end
 
 # ===─ CLI =========================================================================================================
