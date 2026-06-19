@@ -261,7 +261,7 @@ def build_module(
     module: Module,
     release: bool = False,
     verbose: bool = False,
-) -> tuple[bool, float, str]:
+) -> tuple[bool, float, str, str, int]:
 
     print(f"\n  {color('▸', Colors.CYAN)} Building {color(module.name, Colors.BOLD)} ({module.language})...")
 
@@ -269,6 +269,7 @@ def build_module(
     if module.env:
         env.update(module.env)
 
+    started_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
     start = time.time()
 
     if module.name == "frontend":
@@ -285,9 +286,11 @@ def build_module(
                     env={k: v for k, v in env.items() if k != "NODE_ENV"},
                 )
                 if install_result.returncode != 0:
-                    return False, time.time() - start, f"npm install failed:\n{install_result.stderr}"
+                    finished_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                    return False, time.time() - start, f"npm install failed:\n{install_result.stderr}", started_at, install_result.returncode
             except subprocess.TimeoutExpired:
-                return False, time.time() - start, "npm install TIMEOUT (120s)"
+                finished_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                return False, time.time() - start, "npm install TIMEOUT (120s)", started_at, -1
 
     if module.name == "engine":
 
@@ -303,9 +306,11 @@ def build_module(
                 env=env,
             )
         except subprocess.TimeoutExpired:
-            return False, time.time() - start, "CMake configure TIMEOUT (120s)"
+            finished_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
+            return False, time.time() - start, "CMake configure TIMEOUT (120s)", started_at, -1
         except FileNotFoundError as e:
-            return False, 0, f"Command not found: {e}"
+            finished_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
+            return False, 0, f"Command not found: {e}", started_at, -1
         if cfg_result.returncode != 0:
             output_lines = []
             if cfg_result.stdout:
@@ -313,8 +318,9 @@ def build_module(
             if cfg_result.stderr:
                 output_lines.append(cfg_result.stderr.strip())
             output = "\n".join(output_lines)
+            finished_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
             return False, time.time() - start, (
-                f"CMake configure failed:\n{output}")
+                f"CMake configure failed:\n{output}"), started_at, cfg_result.returncode
         if verbose:
             print(f"       {color('cmake configured', Colors.GRAY)}")
         cmd = ["cmake", "--build", "build"]
@@ -336,9 +342,11 @@ def build_module(
             timeout=300,
         )
     except subprocess.TimeoutExpired:
-        return False, time.time() - start, "BUILD TIMEOUT (300s)"
+        finished_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        return False, time.time() - start, "BUILD TIMEOUT (300s)", started_at, -1
     except FileNotFoundError as e:
-        return False, 0, f"Command not found: {e}"
+        finished_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        return False, 0, f"Command not found: {e}", started_at, -1
 
     elapsed = time.time() - start
     output_lines = []
@@ -350,8 +358,9 @@ def build_module(
 
     output = "\n".join(output_lines)
     success = result.returncode == 0
+    finished_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
-    return success, elapsed, output
+    return success, elapsed, output, started_at, result.returncode
 
 def clean_module(module: Module, verbose: bool = False) -> bool:
     print(f"  {color('▸', Colors.YELLOW)} Cleaning {module.name}...")
@@ -445,6 +454,7 @@ def build_diagnostic_report(
     password: Optional[str] = None,
     logd_error: Optional[str] = None,
     chunked: bool = False,
+    module_timings: Optional[list[dict]] = None,
 ) -> dict:
     diagnostic_logd: Optional[str | list[str]]
     if not logd_relpaths:
@@ -471,8 +481,8 @@ def build_diagnostic_report(
             if decrypt_target and password else None
         ),
         "total_modules": len(results),
-        "passed": sum(1 for _, s, _, _, _ in results if s),
-        "failed": sum(1 for _, s, _, _, _ in results if not s),
+        "passed": sum(1 for _, s, _, _, _, _, _ in results if s),
+        "failed": sum(1 for _, s, _, _, _, _, _ in results if not s),
         "modules": [
             {
                 "name": name,
@@ -481,13 +491,14 @@ def build_diagnostic_report(
                 "artifact": binary,
                 "output": output,
             }
-            for name, success, elapsed, output, binary in results
+            for name, success, elapsed, output, binary, _, _ in results
         ],
         "pr_note": (
             (f"Include the encrypted diagnostic logd artifact(s): {', '.join(logd_relpaths)}. " if logd_relpaths else "Encrypted diagnostic logd artifact was not created; include this JSON report showing why. ")
             + "The encrypted .logd is the required diagnostic content for PR review; this JSON file is metadata. "
             + "Maintainers may ask you to remove these diagnostic artifacts before merging."
         ),
+        "module_timings": module_timings or [],
     }
     return report
 
@@ -497,9 +508,46 @@ def write_diagnostic_report(metadata_path: Path, report: dict) -> None:
     print(f"    {color('✓', Colors.GREEN)} {metadata_path.relative_to(ROOT)} created")
 
 
+def build_module_timings(
+    results: list[tuple[str, bool, float, str, Optional[str], str, int]],
+    modules: list[Module],
+) -> list[dict]:
+    """Build the module_timings array from build results and module metadata."""
+    timings = []
+    module_map = {m.name: m for m in modules}
+    for name, success, elapsed, output, binary, started_at, exit_code in results:
+        mod = module_map.get(name)
+        if mod is None:
+            continue
+        timings.append({
+            "module": name,
+            "language": mod.language,
+            "command": " ".join(mod.build_cmd),
+            "started_at": started_at,
+            "finished_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "elapsed_seconds": round(elapsed, 3),
+            "exit_code": exit_code,
+            "status": "clean" if success else "failed",
+        })
+    return timings
+
+
+def print_timing_summary(timings: list[dict]) -> None:
+    """Print a sorted slowest-first timing summary."""
+    if not timings:
+        return
+    sorted_timings = sorted(timings, key=lambda t: t["elapsed_seconds"], reverse=True)
+    print(f"\n  {color('Build Timing Summary (slowest first):', Colors.BOLD)}")
+    for t in sorted_timings:
+        status_color = Colors.GREEN if t["status"] == "clean" else Colors.RED
+        print(f"    {color(t['module'], Colors.BOLD):40s} {t['elapsed_seconds']:8.3f}s  "
+              f"{color(t['status'], status_color)}")
+
+
 def generate_logd(
-    results: list[tuple[str, bool, float, str, Optional[str]]],
+    results: list[tuple[str, bool, float, str, Optional[str], str, int]],
     verbose: bool = False,
+    module_timings: Optional[list[dict]] = None,
 ) -> bool:
     logd_path, metadata_path, commit_id = diagnostic_paths_for_commit()
     display_logd = logd_path.relative_to(ROOT)
@@ -508,13 +556,13 @@ def generate_logd(
     # Always write the JSON report first. The encrypted .logd is useful, but the
     # report is required even when the build failed before compilation started or
     # when encryptly itself is unavailable.
-    write_diagnostic_report(metadata_path, build_diagnostic_report(results, commit_id))
+    write_diagnostic_report(metadata_path, build_diagnostic_report(results, commit_id, module_timings=module_timings))
 
     encryptly_bin = get_encryptly_bin()
     if encryptly_bin is None:
         error = f"encryptly binary not found ({encryptly_platform_help()}); cannot create {display_logd}"
         print(f"    {color('✗', Colors.RED)} {error}")
-        write_diagnostic_report(metadata_path, build_diagnostic_report(results, commit_id, logd_error=error))
+        write_diagnostic_report(metadata_path, build_diagnostic_report(results, commit_id, logd_error=error, module_timings=module_timings))
         return False
 
     # Workspace must live under $HOME because encryptly refuses paths outside home.
@@ -535,12 +583,12 @@ def generate_logd(
             "=" * 50,
             f"generated_at: {datetime.datetime.now(datetime.timezone.utc).isoformat()}",
             f"total_modules: {len(results)}",
-            f"passed: {sum(1 for _, s, _, _, _ in results if s)}",
-            f"failed: {sum(1 for _, s, _, _, _ in results if not s)}",
+            f"passed: {sum(1 for _, s, _, _, _, _, _ in results if s)}",
+            f"failed: {sum(1 for _, s, _, _, _, _, _ in results if not s)}",
             "",
             "module results:",
         ]
-        for name, success, elapsed, _, binary in results:
+        for name, success, elapsed, _, binary, _, _ in results:
             summary_lines.append(
                 f"  {name}: {'PASS' if success else 'FAIL'} ({elapsed:.2f}s)"
                 f"{f' [{binary}]' if binary else ''}"
@@ -550,7 +598,7 @@ def generate_logd(
         )
 
         log_lines = []
-        for name, success, elapsed, output, binary in results:
+        for name, success, elapsed, output, binary, _, _ in results:
             log_lines.append(
                 f"\n{'=' * 50}\n{name} ({'PASS' if success else 'FAIL'}, {elapsed:.2f}s)\n"
                 f"{'=' * 50}"
@@ -586,7 +634,7 @@ def generate_logd(
                 logd_path.unlink()
             write_diagnostic_report(
                 metadata_path,
-                build_diagnostic_report(results, commit_id, logd_error=error),
+                build_diagnostic_report(results, commit_id, logd_error=error, module_timings=module_timings),
             )
             return False
 
@@ -602,6 +650,7 @@ def generate_logd(
                 logd_relpaths=logd_relpaths,
                 password=safe_pw,
                 chunked=len(logd_files) > 1,
+                module_timings=module_timings,
             ),
         )
 
@@ -632,15 +681,15 @@ def generate_logd(
         shutil.rmtree(workspace, ignore_errors=True)
 
 
-def print_summary(results: list[tuple[str, bool, float, str, Optional[str]]]):
+def print_summary(results: list[tuple[str, bool, float, str, Optional[str], str, int]]):
     print(f"  {color('Build Summary', Colors.BOLD)}")
 
     total = len(results)
-    passed = sum(1 for _, s, _, _, _ in results if s)
+    passed = sum(1 for _, s, _, _, _, _, _ in results if s)
     failed = total - passed
-    total_time = sum(t for _, _, t, _, _ in results)
+    total_time = sum(t for _, _, t, _, _, _, _ in results)
 
-    for name, success, elapsed, output, binary in results:
+    for name, success, elapsed, output, binary, _, _ in results:
         status_icon = color("✓", Colors.GREEN) if success else color("✗", Colors.RED)
         status_text = color("PASS", Colors.GREEN) if success else color("FAIL", Colors.RED)
         time_str = f"{elapsed:.1f}s" if elapsed < 60 else f"{elapsed / 60:.1f}m"
@@ -698,6 +747,11 @@ Diagnostic bundle:
     parser.add_argument(
         "--list", action="store_true",
         help="List available modules and exit",
+    )
+    parser.add_argument(
+        "--timings-json",
+        help="Write module timings array to a caller-specified JSON file",
+        default=None,
     )
 
     args = parser.parse_args()
@@ -762,16 +816,24 @@ Diagnostic bundle:
 
     print(f"\n  {color(f'Building {len(selected)} module(s) | release={args.release}', Colors.GRAY)}")
 
-    results: list[tuple[str, bool, float, str, Optional[str]]] = []
+    results: list[tuple[str, bool, float, str, Optional[str], str, int]] = []
 
     for module in selected:
-        success, elapsed, output = build_module(module, args.release, args.verbose)
+        success, elapsed, output, started_at, exit_code = build_module(module, args.release, args.verbose)
         binary = verify_binary(module) if success else None
-        results.append((module.name, success, elapsed, output, binary))
+        results.append((module.name, success, elapsed, output, binary, started_at, exit_code))
 
     print_summary(results)
 
-    generate_logd(results, args.verbose)
+    module_timings = build_module_timings(results, selected)
+    print_timing_summary(module_timings)
+
+    generate_logd(results, args.verbose, module_timings=module_timings)
+
+    if args.timings_json:
+        timings_path = Path(args.timings_json)
+        timings_path.write_text(json.dumps(module_timings, indent=2) + "\n", encoding="utf-8")
+        print(f"\n  {color('✓', Colors.GREEN)} Timings written to {args.timings_json}")
 
     return 0 if all(r[1] for r in results) else 1
 
