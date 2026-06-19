@@ -5,10 +5,12 @@ pub mod ai;
 pub mod config;
 pub mod connector;
 pub mod discovery;
+pub mod health;
 pub mod legacy;
 pub mod messaging;
 pub mod protocol;
 pub mod registry;
+pub mod request_id;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const BUILD_PROFILE: &str = if cfg!(debug_assertions) {

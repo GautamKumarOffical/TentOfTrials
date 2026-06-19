@@ -64,6 +64,28 @@ Default rate limits:
 - Unauthenticated: 10 requests per second
 - WebSocket: 1000 messages per second per connection
 
+### Request ID Propagation
+
+All API requests support request ID propagation for log correlation:
+
+**Request Header:**
+
+| Header | Type | Required | Description |
+|--------|------|----------|-------------|
+| `X-Request-Id` | string | No | Client-provided request ID (max 128 chars) |
+
+**Response Header:**
+
+| Header | Type | Description |
+|--------|------|-------------|
+| `X-Request-Id` | string | The final request ID used for this request |
+
+**Behavior:**
+- If `X-Request-Id` is provided and valid (non-empty, < 128 chars), it is used
+- If missing or invalid, a UUID is generated automatically
+- The request ID is included in all backend log messages for the request
+- The request ID is returned in the response `X-Request-Id` header
+
 ### Error Responses
 
 All API errors follow a standard format:
