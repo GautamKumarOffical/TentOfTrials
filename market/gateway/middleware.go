@@ -38,12 +38,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
-	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"runtime/debug"
 	"strconv"
@@ -230,18 +226,30 @@ func AuthMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// RateLimitMiddleware applies rate limiting based on client IP or API key.
-// Uses a token bucket algorithm with configurable rate and burst.
-func RateLimitMiddleware(ratePerSecond float64, burst int) func(http.Handler) http.Handler {
+// RateLimitMiddleware applies per-IP rate limiting with a sliding window counter.
+// Defaults to 120 requests per minute per client IP. Override with:
+//
+//	MARKET_RATE_LIMIT_PER_MINUTE – requests allowed per minute (default 120)
+//	MARKET_RATE_LIMIT_BURST      – extra burst capacity (default 120)
+//
+// Returns HTTP 429 with JSON body and Retry-After header when exceeded.
+func RateLimitMiddleware(ratePerMinute float64, burst int) func(http.Handler) http.Handler {
+	if ratePerMinute <= 0 {
+		ratePerMinute = 120
+	}
+	if burst <= 0 {
+		burst = int(ratePerMinute)
+	}
+
 	var mu sync.Mutex
-	clients := make(map[string]*tokenBucket)
+	clients := make(map[string]*slidingWindow)
 
 	cleanupTicker := time.NewTicker(5 * time.Minute)
 	go func() {
 		for range cleanupTicker.C {
 			mu.Lock()
-			for ip, bucket := range clients {
-				if time.Since(bucket.lastAccess) > 10*time.Minute {
+			for ip, sw := range clients {
+				if time.Since(sw.lastAccess) > 10*time.Minute {
 					delete(clients, ip)
 				}
 			}
@@ -257,29 +265,29 @@ func RateLimitMiddleware(ratePerSecond float64, burst int) func(http.Handler) ht
 			}
 
 			mu.Lock()
-			bucket, exists := clients[key]
+			sw, exists := clients[key]
 			if !exists {
-				bucket = &tokenBucket{
-					tokens:     float64(burst),
-					maxTokens:  float64(burst),
-					rate:       ratePerSecond,
-					lastAccess: time.Now(),
+				sw = &slidingWindow{
+					windowStart: time.Now(),
+					count:       0,
+					lastAccess:  time.Now(),
 				}
-				clients[key] = bucket
+				clients[key] = sw
 			}
-			bucket.lastAccess = time.Now()
+			sw.lastAccess = time.Now()
 			mu.Unlock()
 
-			allowed, remaining, reset := bucket.allow()
+			allowed, remaining, retryAfter := sw.allow(ratePerMinute, burst)
+
 			w.Header().Set("X-RateLimit-Limit", strconv.Itoa(burst))
 			w.Header().Set("X-RateLimit-Remaining", strconv.Itoa(remaining))
-			w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(reset, 10))
 
 			if !allowed {
+				w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
 				writeJSON(w, http.StatusTooManyRequests, map[string]interface{}{
-					"error":   "rate_limit_exceeded",
-					"message": "Too many requests. Please slow down.",
-					"retry_after": reset - time.Now().Unix(),
+					"error":      "rate_limit_exceeded",
+					"message":    "Too many requests. Please slow down.",
+					"retry_after": retryAfter,
 				})
 				return
 			}
@@ -289,38 +297,33 @@ func RateLimitMiddleware(ratePerSecond float64, burst int) func(http.Handler) ht
 	}
 }
 
-type tokenBucket struct {
-	mu         sync.Mutex
-	tokens     float64
-	maxTokens  float64
-	rate       float64
-	lastAccess time.Time
-	lastCheck  time.Time
+type slidingWindow struct {
+	mu          sync.Mutex
+	windowStart time.Time
+	count       int
+	lastAccess  time.Time
 }
 
-func (tb *tokenBucket) allow() (bool, int, int64) {
-	tb.mu.Lock()
-	defer tb.mu.Unlock()
+func (sw *slidingWindow) allow(ratePerMinute float64, burst int) (bool, int, int) {
+	sw.mu.Lock()
+	defer sw.mu.Unlock()
 
 	now := time.Now()
-	elapsed := now.Sub(tb.lastCheck).Seconds()
-	tb.lastCheck = now
+	windowDuration := time.Minute
 
-	tb.tokens += elapsed * tb.rate
-	if tb.tokens > tb.maxTokens {
-		tb.tokens = tb.maxTokens
+	if now.Sub(sw.windowStart) >= windowDuration {
+		sw.windowStart = now
+		sw.count = 0
 	}
 
-	if tb.tokens >= 1.0 {
-		tb.tokens--
-		remaining := int(tb.tokens)
-		reset := now.Add(time.Duration((tb.maxTokens-tb.tokens)/tb.rate) * time.Second).Unix()
-		return true, remaining, reset
+	if sw.count >= burst {
+		retryAfter := int(time.Until(sw.windowStart.Add(windowDuration)).Seconds()) + 1
+		return false, 0, retryAfter
 	}
 
-	remaining := 0
-	reset := now.Add(time.Duration((1.0-tb.tokens)/tb.rate) * time.Second).Unix()
-	return false, remaining, reset
+	sw.count++
+	remaining := burst - sw.count
+	return true, remaining, 0
 }
 
 // MetricsMiddleware collects request metrics for monitoring.
@@ -377,31 +380,10 @@ func CompressMiddleware(next http.Handler) http.Handler {
 // HELPERS
 // ---------------------------------------------------------------------------
 
-func getClientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		parts := strings.Split(xff, ",")
-		return strings.TrimSpace(parts[0])
-	}
-	if xri := r.Header.Get("X-Real-IP"); xri != "" {
-		return xri
-	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
-}
-
 func generateUUID() string {
 	b := make([]byte, 16)
 	rand.Read(b)
 	return hex.EncodeToString(b)
-}
-
-func generateAPIKey() string {
-	b := make([]byte, 32)
-	rand.Read(b)
-	return base64.URLEncoding.EncodeToString(b)
 }
 
 func extractToken(r *http.Request) string {
@@ -426,10 +408,4 @@ func validateToken(token string) (string, string, error) {
 	//   5. Extract user ID and session ID
 	//   6. Return them
 	return "user_stub", "session_stub", nil
-}
-
-func writeJSON(w http.ResponseWriter, status int, data interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(data)
 }
