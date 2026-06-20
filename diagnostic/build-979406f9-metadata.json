@@ -1,0 +1,75 @@
+{
+  "generated_at": "2026-06-20T04:46:35.911397+00:00",
+  "commit": "979406f9",
+  "diagnostic_logd": "diagnostic/build-979406f9.logd",
+  "chunked": false,
+  "chunk_size_bytes": null,
+  "password": "418ae8b3cb32b3cb8c5d",
+  "decrypt_command": "encryptly unpack diagnostic/build-979406f9.logd <outdir> --password 418ae8b3cb32b3cb8c5d",
+  "total_modules": 10,
+  "passed": 9,
+  "failed": 1,
+  "modules": [
+    {
+      "name": "backend",
+      "status": "PASS",
+      "elapsed_seconds": 0.229,
+      "artifact": "/tmp/opencode/tentoftrials/backend/target"
+    },
+    {
+      "name": "frontend",
+      "status": "PASS",
+      "elapsed_seconds": 7.672,
+      "artifact": "/tmp/opencode/tentoftrials/frontend/dist"
+    },
+    {
+      "name": "market",
+      "status": "PASS",
+      "elapsed_seconds": 0.877,
+      "artifact": "/tmp/opencode/tentoftrials/market/market"
+    },
+    {
+      "name": "frailbox",
+      "status": "PASS",
+      "elapsed_seconds": 0.005,
+      "artifact": "/tmp/opencode/tentoftrials/frailbox/frailbox"
+    },
+    {
+      "name": "engine",
+      "status": "PASS",
+      "elapsed_seconds": 0.118,
+      "artifact": "/tmp/opencode/tentoftrials/frailbox/engine/build/trial-engine"
+    },
+    {
+      "name": "compliance",
+      "status": "PASS",
+      "elapsed_seconds": 1.38,
+      "artifact": "/tmp/opencode/tentoftrials/compliance/build"
+    },
+    {
+      "name": "v2-market-stream",
+      "status": "PASS",
+      "elapsed_seconds": 0.019,
+      "artifact": null
+    },
+    {
+      "name": "nfc-scanner",
+      "status": "PASS",
+      "elapsed_seconds": 0.004,
+      "artifact": null
+    },
+    {
+      "name": "openapi-haskell",
+      "status": "FAIL",
+      "elapsed_seconds": 0.432,
+      "artifact": null
+    },
+    {
+      "name": "openapi-tools",
+      "status": "PASS",
+      "elapsed_seconds": 0.003,
+      "artifact": null
+    }
+  ],
+  "pr_note": "Include this metadata and diagnostic/build-979406f9.logd in your PR. Maintainers may ask you to remove these diagnostic artifacts before merging."
+}
