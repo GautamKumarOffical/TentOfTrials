@@ -13,6 +13,43 @@
 > The known issues from the migration are tracked in the "K8s Migration Known
 > Issues" spreadsheet which is linked from the team's shared drive.
 
+## Log Configuration
+
+The backend supports structured JSON logging for integration with log aggregation
+and deployment tooling. The log format is controlled by the `TOT_LOG_FORMAT`
+environment variable.
+
+| Variable | Values | Default | Description |
+|----------|--------|---------|-------------|
+| `TOT_LOG_FORMAT` | `text`, `json` | `text` | Controls log output format |
+
+**Text format** produces human-readable log lines suitable for development and
+interactive debugging:
+
+```
+2024-01-15T12:00:00Z  INFO tent_backend: initializing tent backend orchestration framework node_id=node-0
+```
+
+**JSON format** produces one JSON object per line with structured fields:
+
+```json
+{"timestamp":"2024-01-15T12:00:00Z","level":"INFO","target":"tent_backend","message":"initializing tent backend orchestration framework","node_id":"node-0"}
+```
+
+JSON log fields:
+
+| Field | Description |
+|-------|-------------|
+| `timestamp` | ISO 8601 timestamp |
+| `level` | Log level (TRACE, DEBUG, INFO, WARN, ERROR) |
+| `target` | Rust module path |
+| `message` | Log message |
+| `node_id` | Backend node identifier (when available) |
+| `request_id` | Request correlation ID (when available, e.g. in HTTP handlers) |
+
+Invalid values for `TOT_LOG_FORMAT` cause the service to fail at startup with a
+descriptive error message.
+
 ## Monitoring
 
 ### Health Check Endpoints
