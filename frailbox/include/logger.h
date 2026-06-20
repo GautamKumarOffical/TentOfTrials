@@ -333,6 +333,80 @@ void log_hex_dump(const char *label, const unsigned char *data, size_t len);
  */
 int log_assert(int condition, const char *expr, const char *file, int line);
 
+/* ------------------------------------------------------------------ */
+/* FILE ROTATION CONFIGURATION                                         */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Configuration structure for log file rotation.
+ * When rotation is enabled, the logger will rotate the active log file
+ * when it exceeds the configured maximum size. Rotated files are named
+ * with a numeric suffix (e.g., app.log.1, app.log.2).
+ *
+ * The default behavior (when rotation is not configured) is to append
+ * to a single log file without rotation, which matches the existing
+ * legacy logger behavior.
+ */
+typedef struct {
+    /**
+     * Maximum size of the active log file in bytes before rotation.
+     * Set to 0 to disable rotation (default behavior).
+     * When the file exceeds this size, it will be rotated on the next
+     * log write that would exceed the limit.
+     */
+    unsigned long max_file_size;
+
+    /**
+     * Maximum number of rotated log files to keep.
+     * When this limit is reached, the oldest rotated file is deleted.
+     * Default: 3 (keeps files .1, .2, and .3)
+     * Must be at least 1 if rotation is enabled.
+     */
+    int max_files;
+
+    /**
+     * Base path for rotated log files.
+     * If NULL, the original log file path is used as the base.
+     * Rotated files are named: {base}.{N} where N is 1, 2, ...
+     */
+    const char *rotation_path;
+} log_rotation_config_t;
+
+/**
+ * Configure log file rotation.
+ * Must be called after log_init() and before any log messages are written.
+ * If not called, rotation is disabled (legacy behavior).
+ *
+ * Environment variables (read during log_init):
+ *   LOG_MAX_FILE_SIZE  - Maximum file size in bytes (default: 0, disabled)
+ *   LOG_MAX_FILES      - Maximum number of rotated files (default: 3)
+ *   LOG_ROTATION_PATH  - Base path for rotated files (optional)
+ *
+ * @param config Rotation configuration, or NULL to disable rotation
+ * @return 0 on success, -1 on failure
+ */
+int log_set_rotation(const log_rotation_config_t *config);
+
+/**
+ * Get the current rotation configuration.
+ * Thread-safe.
+ *
+ * @param config Pointer to configuration structure to fill
+ * @return 0 on success, -1 if rotation is not configured
+ */
+int log_get_rotation(log_rotation_config_t *config);
+
+/**
+ * Manually trigger log file rotation.
+ * This is useful for forcing rotation during maintenance windows
+ * or when the log file needs to be rotated for external reasons.
+ * Rotation will only occur if rotation is configured and there is
+ * an active log file.
+ *
+ * @return 0 on success, -1 on failure or if rotation is not configured
+ */
+int log_rotate(void);
+
 #ifdef __cplusplus
 }
 #endif

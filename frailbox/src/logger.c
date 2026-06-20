@@ -177,9 +177,106 @@ static char g_module_name[64] = "frailbox";
  */
 static pid_t g_pid = 0;
 
+/**
+ * File rotation configuration.
+ * When rotation_enabled is true, the logger will rotate the active log file
+ * when it exceeds max_file_size bytes. At most max_files rotated files are kept.
+ */
+static struct {
+    int enabled;
+    unsigned long max_file_size;
+    int max_files;
+    char base_path[1024];
+    unsigned long current_size;
+} g_rotation = {
+    .enabled = 0,
+    .max_file_size = 0,
+    .max_files = 3,
+    .base_path = {0},
+    .current_size = 0,
+};
+
 /* ------------------------------------------------------------------ */
 /* INTERNAL HELPERS                                                    */
 /* ------------------------------------------------------------------ */
+
+/**
+ * Performs log file rotation.
+ * This function should be called with log_mutex held.
+ * Rotates the current log file by renaming it to {base_path}.{N}
+ * and deleting the oldest file if max_files limit is reached.
+ *
+ * @param force If non-zero, force rotation even if size limit not reached
+ * @return 0 on success, -1 on failure
+ */
+static int perform_rotation_locked(int force)
+{
+    if (!g_rotation.enabled || g_log_file == NULL || g_log_file == stderr) {
+        return -1;
+    }
+
+    if (!force && g_rotation.current_size < g_rotation.max_file_size) {
+        return 0; /* No rotation needed */
+    }
+
+    /* Flush the current log file */
+    fflush(g_log_file);
+    fclose(g_log_file);
+    g_log_file = NULL;
+
+    /* Delete the oldest file if it exists */
+    char path[1200];
+    if (g_rotation.max_files > 0) {
+        snprintf(path, sizeof(path), "%s.%d", g_rotation.base_path, g_rotation.max_files);
+        remove(path);
+    }
+
+    /* Shift existing rotated files */
+    for (int i = g_rotation.max_files - 1; i >= 1; i--) {
+        char from[1200], to[1200];
+        snprintf(from, sizeof(from), "%s.%d", g_rotation.base_path, i);
+        snprintf(to, sizeof(to), "%s.%d", g_rotation.base_path, i + 1);
+        rename(from, to);
+    }
+
+    /* Rename current file to .1 */
+    snprintf(path, sizeof(path), "%s.1", g_rotation.base_path);
+    if (rename(g_rotation.base_path, path) != 0) {
+        /* If rename fails (e.g., file doesn't exist), just continue */
+    }
+
+    /* Open new log file */
+    g_log_file = fopen(g_rotation.base_path, "a");
+    if (g_log_file == NULL) {
+        fprintf(stderr, "Failed to reopen log file '%s' after rotation: %s\n",
+                g_rotation.base_path, strerror(errno));
+        g_log_file = stderr;
+    }
+
+    /* Reset current size */
+    g_rotation.current_size = 0;
+
+    return 0;
+}
+
+/**
+ * Checks if rotation is needed and performs it if necessary.
+ * This function should be called after writing to the log file.
+ *
+ * @param bytes_written Number of bytes just written
+ */
+static void check_and_rotate(size_t bytes_written)
+{
+    if (!g_rotation.enabled) {
+        return;
+    }
+
+    g_rotation.current_size += bytes_written;
+
+    if (g_rotation.current_size >= g_rotation.max_file_size) {
+        perform_rotation_locked(0);
+    }
+}
 
 /**
  * Gets the current time as a struct tm. Thread-safe.
@@ -404,6 +501,40 @@ int log_init(void)
         g_include_timestamps = 0;
     }
 
+    /* Read rotation configuration */
+    const char *env_max_size = getenv("LOG_MAX_FILE_SIZE");
+    if (env_max_size != NULL && strlen(env_max_size) > 0) {
+        g_rotation.max_file_size = (unsigned long)strtoul(env_max_size, NULL, 10);
+        if (g_rotation.max_file_size > 0) {
+            g_rotation.enabled = 1;
+        }
+    }
+
+    const char *env_max_files = getenv("LOG_MAX_FILES");
+    if (env_max_files != NULL && strlen(env_max_files) > 0) {
+        g_rotation.max_files = atoi(env_max_files);
+        if (g_rotation.max_files < 1) {
+            g_rotation.max_files = 1;
+        }
+    }
+
+    const char *env_rotation_path = getenv("LOG_ROTATION_PATH");
+    if (env_rotation_path != NULL && strlen(env_rotation_path) > 0) {
+        strncpy(g_rotation.base_path, env_rotation_path, sizeof(g_rotation.base_path) - 1);
+        g_rotation.base_path[sizeof(g_rotation.base_path) - 1] = '\0';
+    } else if (env_log_file != NULL && strlen(env_log_file) > 0) {
+        strncpy(g_rotation.base_path, env_log_file, sizeof(g_rotation.base_path) - 1);
+        g_rotation.base_path[sizeof(g_rotation.base_path) - 1] = '\0';
+    }
+
+    /* Initialize current_size from existing file size if rotation is enabled */
+    if (g_rotation.enabled && g_log_file != NULL && g_log_file != stderr) {
+        long pos = ftell(g_log_file);
+        if (pos >= 0) {
+            g_rotation.current_size = (unsigned long)pos;
+        }
+    }
+
     pthread_mutex_unlock(&log_mutex);
 
     LOG_INFO("Legacy logging subsystem initialized (level=%d, module=%s)", g_log_level, g_module_name);
@@ -526,9 +657,16 @@ void log_message(int level, const char *file, int line, const char *fmt, ...)
     }
 
     /* Write to output */
-    if (g_log_file != NULL) {
-        fputs(buffer, g_log_file);
+    if (g_log_file != NULL && g_log_file != stderr) {
+        size_t bytes_written = fputs(buffer, g_log_file);
         fflush(g_log_file);
+        
+        /* Check if rotation is needed */
+        if (g_rotation.enabled) {
+            /* Approximate bytes written (fputs returns EOF or 0 on success) */
+            size_t msg_len = strlen(buffer);
+            check_and_rotate(msg_len);
+        }
     } else {
         fputs(buffer, stderr);
         fflush(stderr);
@@ -538,6 +676,94 @@ void log_message(int level, const char *file, int line, const char *fmt, ...)
 
     /* Add to ring buffer for crash reporter */
     ring_buffer_push(buffer);
+}
+
+/**
+ * Configure log file rotation.
+ * Must be called after log_init() and before any log messages are written.
+ * If not called, rotation is disabled (legacy behavior).
+ *
+ * @param config Rotation configuration, or NULL to disable rotation
+ * @return 0 on success, -1 on failure
+ */
+int log_set_rotation(const log_rotation_config_t *config)
+{
+    pthread_mutex_lock(&log_mutex);
+
+    if (config == NULL) {
+        g_rotation.enabled = 0;
+        g_rotation.max_file_size = 0;
+        g_rotation.max_files = 3;
+        memset(g_rotation.base_path, 0, sizeof(g_rotation.base_path));
+        g_rotation.current_size = 0;
+        pthread_mutex_unlock(&log_mutex);
+        return 0;
+    }
+
+    g_rotation.max_file_size = config->max_file_size;
+    g_rotation.max_files = config->max_files;
+    
+    if (g_rotation.max_files < 1) {
+        g_rotation.max_files = 1;
+    }
+
+    if (config->rotation_path != NULL && strlen(config->rotation_path) > 0) {
+        strncpy(g_rotation.base_path, config->rotation_path, sizeof(g_rotation.base_path) - 1);
+        g_rotation.base_path[sizeof(g_rotation.base_path) - 1] = '\0';
+    }
+
+    g_rotation.enabled = (g_rotation.max_file_size > 0) ? 1 : 0;
+
+    /* Initialize current_size from existing file size if rotation is enabled */
+    if (g_rotation.enabled && g_log_file != NULL && g_log_file != stderr) {
+        long pos = ftell(g_log_file);
+        if (pos >= 0) {
+            g_rotation.current_size = (unsigned long)pos;
+        }
+    }
+
+    pthread_mutex_unlock(&log_mutex);
+    return 0;
+}
+
+/**
+ * Get the current rotation configuration.
+ * Thread-safe.
+ *
+ * @param config Pointer to configuration structure to fill
+ * @return 0 on success, -1 if rotation is not configured
+ */
+int log_get_rotation(log_rotation_config_t *config)
+{
+    if (config == NULL) {
+        return -1;
+    }
+
+    pthread_mutex_lock(&log_mutex);
+
+    config->max_file_size = g_rotation.max_file_size;
+    config->max_files = g_rotation.max_files;
+    config->rotation_path = g_rotation.base_path;
+
+    pthread_mutex_unlock(&log_mutex);
+    return 0;
+}
+
+/**
+ * Manually trigger log file rotation.
+ * This is useful for forcing rotation during maintenance windows
+ * or when the log file needs to be rotated for external reasons.
+ * Rotation will only occur if rotation is configured and there is
+ * an active log file.
+ *
+ * @return 0 on success, -1 on failure or if rotation is not configured
+ */
+int log_rotate(void)
+{
+    pthread_mutex_lock(&log_mutex);
+    int result = perform_rotation_locked(1);
+    pthread_mutex_unlock(&log_mutex);
+    return result;
 }
 
 /**
