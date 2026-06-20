@@ -25,6 +25,7 @@
 //! and auto-tune message broker parameters. This allows the entire service mesh to operate
 //! in a continuous optimization loop without human intervention.
 
+pub mod diagnostics;
 pub mod embeddings;
 pub mod inference;
 
