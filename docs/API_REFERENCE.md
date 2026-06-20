@@ -395,3 +395,80 @@ Send an authentication message after connecting:
 | `account.orders` | User's order updates | Real-time |
 | `account.positions` | User's position updates | Real-time |
 | `account.notifications` | User notifications | Real-time |
+
+### Reconnection Strategy
+
+The frontend WebSocket client implements automatic reconnection with exponential backoff when the connection is unexpectedly dropped.
+
+#### Backoff Algorithm
+
+The reconnection delay is calculated using truncated exponential backoff with jitter:
+
+```
+delay = min(baseDelay × 2^attempt, maxDelay) + random(0, jitter)
+```
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `baseDelay` | 1000ms | Initial delay before first retry |
+| `maxDelay` | 30000ms | Maximum delay cap (30 seconds) |
+| `jitter` | 1000ms | Random jitter range to prevent thundering herd |
+| `maxAttempts` | 10 | Maximum reconnection attempts before giving up |
+
+#### Connection States
+
+The client tracks connection state with the following typed states:
+
+| State | Description |
+|-------|-------------|
+| `disconnected` | Not connected to the server |
+| `connecting` | Initial connection in progress |
+| `connected` | Successfully connected |
+| `reconnecting` | Reconnection in progress after disconnect |
+| `error` | Connection failed or max retries exceeded |
+
+#### State Reset
+
+After a stable connection is established (on successful reconnect), the reconnection attempt counter is reset to 0. This ensures the backoff starts fresh for any subsequent disconnections.
+
+#### Usage
+
+```typescript
+import { WebSocketClient } from '../services/websocket';
+
+const client = new WebSocketClient({
+  url: 'wss://api.example.com/ws',
+  reconnect: true,
+  maxReconnectAttempts: 10,
+  reconnectBaseDelay: 1000,
+  reconnectMaxDelay: 30000,
+  reconnectJitter: 1000,
+});
+
+client.onStateChange((state) => {
+  console.log('Connection state:', state);
+});
+
+client.connect();
+```
+
+#### React Hook Usage
+
+```typescript
+import { useWebSocket } from '../hooks/useWebSocket';
+
+function MyComponent() {
+  const { connectionState, connect, disconnect, send } = useWebSocket({
+    url: 'wss://api.example.com/ws',
+    autoConnect: true,
+  });
+
+  return (
+    <div>
+      <p>Status: {connectionState}</p>
+      <button onClick={connect}>Connect</button>
+      <button onClick={disconnect}>Disconnect</button>
+    </div>
+  );
+}
+```
