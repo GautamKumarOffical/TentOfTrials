@@ -322,9 +322,16 @@ impl SchemaValidator {
                                         }
                                     }
                                     FieldValidation::Pattern(pattern) => {
-                                        let re = regex::Regex::new(pattern).unwrap();
-                                        if !re.is_match(s) {
-                                            return Err(ProtocolError::ValidationFailed);
+                                        match regex::Regex::new(pattern) {
+                                            Ok(re) => {
+                                                if !re.is_match(s) {
+                                                    return Err(ProtocolError::ValidationFailed);
+                                                }
+                                            }
+                                            Err(_) => {
+                                                log::error!("invalid regex pattern in schema: {}", pattern);
+                                                return Err(ProtocolError::ValidationFailed);
+                                            }
                                         }
                                     }
                                     FieldValidation::Enum(variants) => {

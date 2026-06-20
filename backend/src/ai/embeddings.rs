@@ -160,14 +160,18 @@ pub struct OpenAiEmbedder {
 impl OpenAiEmbedder {
     /// Creates a new OpenAI embedder with the text-embedding-3-small model.
     pub fn new(api_key: impl Into<String>) -> Self {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .unwrap_or_else(|e| {
+                warn!("failed to build reqwest client for embeddings, using default: {}", e);
+                reqwest::Client::new()
+            });
         Self {
             api_key: api_key.into(),
             model: "text-embedding-3-small".to_string(),
             dimension: DEFAULT_EMBEDDING_DIMENSION,
-            client: reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(30))
-                .build()
-                .expect("failed to build reqwest client for embeddings"),
+            client,
             token_counter: TokenCounter::new(),
         }
     }

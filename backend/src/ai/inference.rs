@@ -310,6 +310,14 @@ pub struct OpenAiClient {
 impl OpenAiClient {
     /// Creates a new OpenAI client.
     pub fn new(api_key: impl Into<String>) -> Self {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(120))
+            .user_agent("tent-of-trials/ai-inference/1.0")
+            .build()
+            .unwrap_or_else(|e| {
+                warn!("failed to build reqwest client for OpenAI, using default: {}", e);
+                reqwest::Client::new()
+            });
         Self {
             api_key: api_key.into(),
             organization_id: None,
@@ -331,11 +339,7 @@ impl OpenAiClient {
                     is_deprecated: false,
                 },
             ],
-            client: reqwest::Client::builder()
-                .timeout(Duration::from_secs(120))
-                .user_agent("tent-of-trials/ai-inference/1.0")
-                .build()
-                .expect("failed to build reqwest client for OpenAI"),
+            client,
             request_count: AtomicU64::new(0),
         }
     }
@@ -458,6 +462,14 @@ pub struct AnthropicClient {
 
 impl AnthropicClient {
     pub fn new(api_key: impl Into<String>) -> Self {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(120))
+            .user_agent("tent-of-trials/ai-inference/1.0")
+            .build()
+            .unwrap_or_else(|e| {
+                warn!("failed to build reqwest client for Anthropic, using default: {}", e);
+                reqwest::Client::new()
+            });
         Self {
             api_key: api_key.into(),
             base_url: "https://api.anthropic.com/v1".to_string(),
@@ -478,11 +490,7 @@ impl AnthropicClient {
                     is_deprecated: false,
                 },
             ],
-            client: reqwest::Client::builder()
-                .timeout(Duration::from_secs(120))
-                .user_agent("tent-of-trials/ai-inference/1.0")
-                .build()
-                .expect("failed to build reqwest client for Anthropic"),
+            client,
         }
     }
 }
@@ -536,13 +544,17 @@ pub struct OllamaClient {
 
 impl OllamaClient {
     pub fn new(base_url: Option<String>) -> Self {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(300))
+            .build()
+            .unwrap_or_else(|e| {
+                warn!("failed to build reqwest client for Ollama, using default: {}", e);
+                reqwest::Client::new()
+            });
         Self {
             base_url: base_url.unwrap_or_else(|| "http://localhost:11434".to_string()),
             models: vec![ModelDescriptor::ollama_llama3()],
-            client: reqwest::Client::builder()
-                .timeout(Duration::from_secs(300))
-                .build()
-                .expect("failed to build reqwest client for Ollama"),
+            client,
         }
     }
 }

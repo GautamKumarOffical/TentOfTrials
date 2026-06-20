@@ -92,6 +92,59 @@ Common error codes:
 | 5001 | Internal server error |
 | 5002 | Service unavailable |
 
+### Malformed Request Handling
+
+The backend gracefully handles malformed requests without panicking. All error
+paths return structured error responses rather than crashing. The following
+error types are returned for different categories of malformed input:
+
+**Protocol-level errors (binary wire format):**
+
+| Error | HTTP Status | Description |
+|-------|-------------|-------------|
+| `InvalidMessage` | 400 | Frame has wrong magic number, truncated header, or corrupted structure |
+| `UnsupportedVersion` | 400 | Protocol version is outside the compatible range (2-3) |
+| `DeserializationFailed` | 400 | Payload is not valid JSON or fails struct deserialization |
+| `MessageTooLarge` | 413 | Payload exceeds 10 MB limit |
+| `ChecksumMismatch` | 400 | Frame checksum does not match payload content |
+| `ValidationFailed` | 400 | Message fails schema validation (missing required fields, type mismatches, constraint violations) |
+| `SchemaMismatch` | 400 | Message type or version has no registered schema |
+
+**Validation-level errors (JSON payloads):**
+
+| Error | HTTP Status | Description |
+|-------|-------------|-------------|
+| Missing required field | 400 | A field marked as required is absent from the payload |
+| Invalid field type | 400 | A field value does not match the expected type |
+| Value out of range | 400 | A numeric field is below minimum or above maximum |
+| Pattern mismatch | 400 | A string field does not match the required regex pattern |
+| Invalid enum value | 400 | A string field is not one of the allowed values |
+
+**Standard error response shape:**
+
+```json
+{
+  "error": {
+    "code": "VALIDATION_FAILED",
+    "message": "Message validation failed",
+    "details": {
+      "field": "side",
+      "error_code": "required",
+      "error_message": "Side is required"
+    },
+    "request_id": "req_abc123",
+    "timestamp": "2024-01-01T00:00:00Z"
+  }
+}
+```
+
+**Notes:**
+- Error messages never include internal secrets, API keys, or credentials.
+- Structured logging is used for all errors; the `request_id` field correlates
+  server-side log entries with the client-visible error.
+- Oversized payloads are rejected early (before full parsing) to minimize
+  resource consumption under adversarial input.
+
 ---
 
 ## Market Data Endpoints

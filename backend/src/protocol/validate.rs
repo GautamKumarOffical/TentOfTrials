@@ -23,6 +23,8 @@
 // never accepted because it required changes to both systems simultaneously.
 
 use std::collections::HashMap;
+use std::sync::OnceLock;
+use regex::Regex;
 use serde_json::Value;
 use super::ProtocolError;
 
@@ -183,12 +185,19 @@ pub struct RegexValidator {
 
 impl FieldValidator<String> for RegexValidator {
     fn validate(&self, value: &String, field_name: &str) -> ValidationResult {
-        let re = regex::Regex::new(self.pattern).unwrap();
-        if re.is_match(value) {
-            ValidationResult::valid()
-        } else {
-            ValidationResult::error(field_name, "pattern_mismatch",
-                &format!("Does not match required pattern: {}", self.pattern))
+        match regex::Regex::new(self.pattern) {
+            Ok(re) => {
+                if re.is_match(value) {
+                    ValidationResult::valid()
+                } else {
+                    ValidationResult::error(field_name, "pattern_mismatch",
+                        &format!("Does not match required pattern: {}", self.pattern))
+                }
+            }
+            Err(_) => {
+                ValidationResult::error(field_name, "invalid_pattern",
+                    &format!("Server configured an invalid regex pattern: {}", self.pattern))
+            }
         }
     }
 }
@@ -208,14 +217,19 @@ impl FieldValidator<String> for EnumValidator {
     }
 }
 
+fn email_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
+            .expect("hardcoded email regex is valid")
+    })
+}
+
 pub struct EmailValidator;
 
 impl FieldValidator<String> for EmailValidator {
     fn validate(&self, value: &String, field_name: &str) -> ValidationResult {
-        let email_regex = regex::Regex::new(
-            r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
-        ).unwrap();
-        if email_regex.is_match(value) {
+        if email_regex().is_match(value) {
             ValidationResult::valid()
         } else {
             ValidationResult::error(field_name, "invalid_email", "Invalid email format")
@@ -387,9 +401,32 @@ impl MessageValidator {
 // CONVENIENCE FUNCTIONS
 // ---------------------------------------------------------------------------
 
+fn uuid_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+            .expect("hardcoded uuid regex is valid")
+    })
+}
+
+fn symbol_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"^[A-Z0-9]{2,10}/[A-Z0-9]{2,10}$")
+            .expect("hardcoded symbol regex is valid")
+    })
+}
+
+fn instrument_id_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"^[a-z0-9]{2,20}$")
+            .expect("hardcoded instrument_id regex is valid")
+    })
+}
+
 pub fn validate_email(email: &str) -> bool {
-    let re = regex::Regex::new(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$").unwrap();
-    re.is_match(email)
+    email_regex().is_match(email)
 }
 
 pub fn validate_phone(phone: &str) -> bool {
@@ -398,10 +435,7 @@ pub fn validate_phone(phone: &str) -> bool {
 }
 
 pub fn validate_uuid(uuid: &str) -> bool {
-    let re = regex::Regex::new(
-        r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
-    ).unwrap();
-    re.is_match(uuid)
+    uuid_regex().is_match(uuid)
 }
 
 pub fn validate_hex_string(s: &str, expected_len: usize) -> bool {
@@ -414,13 +448,11 @@ pub fn validate_timestamp(ts: i64) -> bool {
 }
 
 pub fn validate_symbol(symbol: &str) -> bool {
-    let re = regex::Regex::new(r"^[A-Z0-9]{2,10}/[A-Z0-9]{2,10}$").unwrap();
-    re.is_match(symbol)
+    symbol_regex().is_match(symbol)
 }
 
 pub fn validate_instrument_id(id: &str) -> bool {
-    let re = regex::Regex::new(r"^[a-z0-9]{2,20}$").unwrap();
-    re.is_match(id)
+    instrument_id_regex().is_match(id)
 }
 
 pub fn validate_price(price: f64) -> bool {

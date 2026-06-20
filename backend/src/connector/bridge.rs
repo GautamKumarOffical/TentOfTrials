@@ -93,7 +93,7 @@ impl CircuitBreaker {
     }
 
     fn is_allowed(&self) -> bool {
-        let state = *self.state.read().unwrap();
+        let state = *self.state.read().unwrap_or_else(|e| e.into_inner());
         match state {
             CircuitState::Closed => true,
             CircuitState::Open => {
@@ -101,7 +101,7 @@ impl CircuitBreaker {
                 let now = now_millis();
                 if now - opened >= CIRCUIT_BREAKER_RESET_MS {
                     // Transition to half-open
-                    *self.state.write().unwrap() = CircuitState::HalfOpen;
+                    *self.state.write().unwrap_or_else(|e| e.into_inner()) = CircuitState::HalfOpen;
                     true
                 } else {
                     false
@@ -113,7 +113,7 @@ impl CircuitBreaker {
 
     fn record_success(&self) {
         self.consecutive_errors.store(0, Ordering::Relaxed);
-        let mut state = self.state.write().unwrap();
+        let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
         if *state == CircuitState::HalfOpen {
             *state = CircuitState::Closed;
         }
@@ -123,7 +123,7 @@ impl CircuitBreaker {
         let errors = self.consecutive_errors.fetch_add(1, Ordering::Relaxed) + 1;
         self.last_error_time.store(now_millis(), Ordering::Relaxed);
         if errors >= CIRCUIT_BREAKER_THRESHOLD {
-            let mut state = self.state.write().unwrap();
+            let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
             if *state == CircuitState::Closed {
                 *state = CircuitState::Open;
                 self.opened_at.store(now_millis(), Ordering::Relaxed);
@@ -133,7 +133,7 @@ impl CircuitBreaker {
     }
 
     fn state(&self) -> CircuitState {
-        *self.state.read().unwrap()
+        *self.state.read().unwrap_or_else(|e| e.into_inner())
     }
 }
 
@@ -256,7 +256,7 @@ impl ConnectorBridge {
         ffi::init(config)?;
 
         // Update config
-        *self.config.write().unwrap() = ConnectorConfigBuilder::new()
+        *self.config.write().unwrap_or_else(|e| e.into_inner()) = ConnectorConfigBuilder::new()
             .mode(config.mode)
             .timeout(config.timeout_ms)
             .retry(config.retry_count, config.retry_backoff_ms)
@@ -264,7 +264,7 @@ impl ConnectorBridge {
 
         // Set pool size based on config
         let pool_size = (config.max_concurrency as usize).clamp(1, MAX_POOL_SIZE);
-        *self.pool.lock().unwrap() = ConnectionPool::new(pool_size);
+        *self.pool.lock().unwrap_or_else(|e| e.into_inner()) = ConnectionPool::new(pool_size);
 
         self.initialized.store(true, Ordering::SeqCst);
 
@@ -279,7 +279,7 @@ impl ConnectorBridge {
 
     pub fn shutdown(&self) -> Result<(), ConnectorError> {
         self.shutdown_flag.store(true, Ordering::SeqCst);
-        if let Some(handle) = self.health_check_handle.lock().unwrap().take() {
+        if let Some(handle) = self.health_check_handle.lock().unwrap_or_else(|e| e.into_inner()).take() {
             let _ = handle.join();
         }
         ffi::shutdown()?;
@@ -299,7 +299,7 @@ impl ConnectorBridge {
             });
         }
 
-        let pool = self.pool.lock().unwrap();
+        let pool = self.pool.lock().unwrap_or_else(|e| e.into_inner());
         let pool_idx = pool.acquire();
         drop(pool);
 
@@ -330,11 +330,11 @@ impl ConnectorBridge {
         unsafe { ffi::connector_buffer_free(c_buffer); }
 
         // Release pool entry
-        self.pool.lock().unwrap().release(pool_idx);
+        self.pool.lock().unwrap_or_else(|e| e.into_inner()).release(pool_idx);
 
         // Track stats
         let latency = start.elapsed().as_micros() as u64;
-        let mut stats = self.stats.lock().unwrap();
+        let mut stats = self.stats.lock().unwrap_or_else(|e| e.into_inner());
         stats.total_operations += 1;
         if result.is_ok() {
             stats.successful_operations += 1;
@@ -359,7 +359,7 @@ impl ConnectorBridge {
             });
         }
 
-        let pool = self.pool.lock().unwrap();
+        let pool = self.pool.lock().unwrap_or_else(|e| e.into_inner());
         let pool_idx = pool.acquire();
         drop(pool);
 
@@ -393,10 +393,10 @@ impl ConnectorBridge {
 
         unsafe { ffi::connector_buffer_free(c_buffer); }
 
-        self.pool.lock().unwrap().release(pool_idx);
+        self.pool.lock().unwrap_or_else(|e| e.into_inner()).release(pool_idx);
 
         let latency = start.elapsed().as_micros() as u64;
-        let mut stats = self.stats.lock().unwrap();
+        let mut stats = self.stats.lock().unwrap_or_else(|e| e.into_inner());
         stats.total_operations += 1;
         if result.is_ok() {
             stats.successful_operations += 1;
@@ -413,7 +413,7 @@ impl ConnectorBridge {
     }
 
     pub fn stats(&self) -> BridgeStats {
-        self.stats.lock().unwrap().clone()
+        self.stats.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     pub fn is_initialized(&self) -> bool {
@@ -439,7 +439,7 @@ impl ConnectorBridge {
         let shutdown = self.shutdown_flag.clone();
         let initialized = Arc::new(AtomicBool::new(true));
 
-        let handle = thread::Builder::new()
+        let handle = match thread::Builder::new()
             .name("connector-healthcheck".to_string())
             .spawn(move || {
                 while !shutdown.load(Ordering::Relaxed) {
@@ -452,10 +452,15 @@ impl ConnectorBridge {
                     // and eventually open the circuit.
                     // TODO: Implement actual health check ping in the C library
                 }
-            })
-            .expect("Failed to spawn health check thread");
+            }) {
+            Ok(h) => Some(h),
+            Err(e) => {
+                log::error!("failed to spawn connector health check thread: {}", e);
+                None
+            }
+        };
 
-        *self.health_check_handle.lock().unwrap() = Some(handle);
+        *self.health_check_handle.lock().unwrap_or_else(|e| e.into_inner()) = handle;
     }
 }
 
