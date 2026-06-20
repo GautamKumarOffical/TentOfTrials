@@ -237,6 +237,11 @@ int log_get_level(void);
  * Messages are truncated at 4096 bytes. Truncated messages get a
  * "[TRUNCATED]" suffix. The truncation is silent - no error is returned.
  *
+ * Newline contract: log_message() always appends exactly one trailing
+ * newline ('\n') to each log entry. Callers must NOT include a trailing
+ * newline in the format string. Embedded newlines within the message
+ * body are allowed and preserved as-is.
+ *
  * This function is thread-safe. It acquires a global mutex before
  * formatting and writing the message. For high-throughput logging,
  * this mutex can become a bottleneck. Use the structured logger

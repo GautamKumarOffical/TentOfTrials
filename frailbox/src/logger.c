@@ -315,6 +315,14 @@ static void ring_buffer_push(const char *message)
     strncpy(g_ring_buffer.entries[g_ring_buffer.head], message, MAX_LOG_LINE - 1);
     g_ring_buffer.entries[g_ring_buffer.head][MAX_LOG_LINE - 1] = '\0';
 
+    /* Strip trailing newline so ring_buffer_dump does not produce double newlines */
+    {
+        size_t len = strlen(g_ring_buffer.entries[g_ring_buffer.head]);
+        if (len > 0 && g_ring_buffer.entries[g_ring_buffer.head][len - 1] == '\n') {
+            g_ring_buffer.entries[g_ring_buffer.head][len - 1] = '\0';
+        }
+    }
+
     g_ring_buffer.head = (g_ring_buffer.head + 1) % RING_BUFFER_SIZE;
     if (g_ring_buffer.count < RING_BUFFER_SIZE) {
         g_ring_buffer.count++;
@@ -508,16 +516,15 @@ void log_message(int level, const char *file, int line, const char *fmt, ...)
     /* Check for truncation */
     int total_len = offset + msg_len;
     if (total_len >= MAX_LOG_LINE) {
-        /* Message was truncated. Add truncation indicator. */
-        const char trunc_msg[] = "... [TRUNCATED]";
+        /* Message was truncated. Add truncation indicator and newline. */
+        const char trunc_msg[] = "... [TRUNCATED]\n";
         size_t trunc_len = sizeof(trunc_msg) - 1;
         size_t copy_len = (size_t)(MAX_LOG_LINE - 1 - trunc_len);
         if (copy_len > (size_t)offset) {
-            /* Copy truncation indicator after the partial message */
             memcpy(buffer + copy_len, trunc_msg, trunc_len);
             buffer[MAX_LOG_LINE - 1] = '\0';
         } else {
-            /* Very short buffer - just truncate */
+            /* Very short buffer - force null-term at the end */
             buffer[MAX_LOG_LINE - 1] = '\0';
         }
     } else {
@@ -660,7 +667,9 @@ void log_hex_dump(const char *label, const unsigned char *data, size_t len)
         pos += snprintf(buffer + pos, buf_size - pos, "|\n");
     }
 
-    log_message(LOG_LEVEL_DEBUG, NULL, 0, "%s:\n%s", label, buffer);
+    log_message(LOG_LEVEL_DEBUG, NULL, 0, "%s:\n%.*s",
+                label,
+                (int)(pos > 0 ? pos - 1 : 0), buffer);
     free(buffer);
 }
 
