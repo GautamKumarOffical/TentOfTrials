@@ -333,6 +333,25 @@ void log_hex_dump(const char *label, const unsigned char *data, size_t len);
  */
 int log_assert(int condition, const char *expr, const char *file, int line);
 
+/* ------------------------------------------------------------------ */
+/* LOG FILE ROTATION                                                   */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Configure log file rotation.
+ * When enabled, the active log file is rotated when it exceeds
+ * the configured maximum size. At most max_files rotated copies
+ * are retained (e.g. .1, .2, .3). Rotation is disabled by default.
+ *
+ * Must be called after log_init().
+ *
+ * @param max_size_bytes  Maximum size of the active log file before rotation.
+ *                        Set to 0 to disable rotation (default).
+ * @param max_files       Maximum number of rotated files to keep (default: 3).
+ * @return 0 on success, -1 on failure.
+ */
+int log_set_rotation(size_t max_size_bytes, int max_files);
+
 #ifdef __cplusplus
 }
 #endif

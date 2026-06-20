@@ -47,6 +47,7 @@
 #include <sys/time.h>
 #include <unistd.h>
 #include <errno.h>
+#include <sys/stat.h>
 
 #include "../include/logger.h" /* This header doesn't exist yet. TODO: Create it. */
 
@@ -168,6 +169,15 @@ static struct {
  * TODO: Change the default to the actual process name.
  */
 static char g_module_name[64] = "frailbox";
+
+/* ------------------------------------------------------------------ */
+/* LOG ROTATION STATE                                                  */
+/* ------------------------------------------------------------------ */
+
+static size_t g_max_log_size = 0;
+static int g_max_rotated_files = 3;
+static size_t g_current_log_size = 0;
+static char g_log_file_path[1024] = {0};
 
 /**
  * Process ID cache. Retrieved once during initialization to avoid
@@ -377,12 +387,18 @@ int log_init(void)
 
     const char *env_log_file = getenv("LOG_FILE");
     if (env_log_file != NULL && strlen(env_log_file) > 0) {
+        strncpy(g_log_file_path, env_log_file, sizeof(g_log_file_path) - 1);
+        g_log_file_path[sizeof(g_log_file_path) - 1] = '\0';
         g_log_file = fopen(env_log_file, "a");
         if (g_log_file == NULL) {
             fprintf(stderr, "Failed to open log file '%s': %s\n",
                     env_log_file, strerror(errno));
-            /* Fall back to stderr */
             g_log_file = stderr;
+        } else {
+            struct stat st;
+            if (stat(env_log_file, &st) == 0) {
+                g_current_log_size = (size_t)st.st_size;
+            }
         }
     } else {
         g_log_file = stderr;
@@ -527,7 +543,11 @@ void log_message(int level, const char *file, int line, const char *fmt, ...)
 
     /* Write to output */
     if (g_log_file != NULL) {
-        fputs(buffer, g_log_file);
+        int len = fputs(buffer, g_log_file);
+        g_current_log_size += (size_t)(total_len + 1);
+        if (g_max_log_size > 0 && g_current_log_size >= g_max_log_size) {
+            do_rotate_log();
+        }
         fflush(g_log_file);
     } else {
         fputs(buffer, stderr);
@@ -561,6 +581,48 @@ void log_shutdown(void)
     pthread_mutex_unlock(&log_mutex);
 
     fprintf(stderr, "Legacy logging subsystem shut down.\n");
+}
+
+int log_set_rotation(size_t max_size_bytes, int max_files)
+{
+    pthread_mutex_lock(&log_mutex);
+    g_max_log_size = max_size_bytes;
+    g_max_rotated_files = max_files > 0 ? max_files : 3;
+    pthread_mutex_unlock(&log_mutex);
+    return 0;
+}
+
+static int do_rotate_log(void)
+{
+    if (g_max_log_size == 0 || g_log_file == NULL || g_log_file == stderr) {
+        return 0;
+    }
+    if (g_current_log_size < g_max_log_size) {
+        return 0;
+    }
+
+    fflush(g_log_file);
+    fclose(g_log_file);
+
+    for (int i = g_max_rotated_files; i > 1; i--) {
+        char old_path[1100], new_path[1100];
+        snprintf(old_path, sizeof(old_path), "%s.%d", g_log_file_path, i - 1);
+        snprintf(new_path, sizeof(new_path), "%s.%d", g_log_file_path, i);
+        rename(old_path, new_path);
+    }
+
+    char rotated[1100];
+    snprintf(rotated, sizeof(rotated), "%s.1", g_log_file_path);
+    rename(g_log_file_path, rotated);
+
+    g_log_file = fopen(g_log_file_path, "a");
+    g_current_log_size = 0;
+
+    if (g_log_file == NULL) {
+        g_log_file = stderr;
+        return -1;
+    }
+    return 0;
 }
 
 /**
