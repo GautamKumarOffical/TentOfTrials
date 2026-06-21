@@ -1,0 +1,23 @@
+{
+  "generated_at": "2026-06-21T04:38:18.625587+00:00",
+  "commit": "81f3e49f",
+  "diagnostic_logd": null,
+  "diagnostic_logd_error": "encryptly pack exited 1 without creating diagnostic/build-81f3e49f.logd; stdout was 20 bytes",
+  "chunked": false,
+  "chunk_size_bytes": null,
+  "password": null,
+  "decrypt_command": null,
+  "total_modules": 1,
+  "passed": 1,
+  "failed": 0,
+  "modules": [
+    {
+      "name": "frailbox",
+      "status": "PASS",
+      "elapsed_seconds": 0.012,
+      "artifact": "frailbox/frailbox",
+      "output": "make: Nothing to be done for `all'."
+    }
+  ],
+  "pr_note": "Encrypted diagnostic logd artifact was not created; include this JSON report showing why. The encrypted .logd is the required diagnostic content for PR review; this JSON file is metadata. Maintainers may ask you to remove these diagnostic artifacts before merging."
+}
