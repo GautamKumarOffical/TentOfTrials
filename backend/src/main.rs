@@ -1,27 +1,76 @@
-//! Tent of Trials backend service.
-//!
-//! Main entry point for the trading and risk platform backend.
+use anyhow::Result;
+use clap::Parser;
+use tent_backend::discovery::ServiceDiscovery;
+use tent_backend::messaging::MessageBroker;
+use tent_backend::registry::ServiceRegistry;
+use tent_backend::health::init_startup_time;
+use tracing_subscriber::EnvFilter;
 
-use axum::{Router, routing::get};
-use std::net::SocketAddr;
-use tokio::net::TcpListener;
+#[derive(Parser, Debug)]
+#[command(name = "tent-backend")]
+#[command(about = "Tent of Trials Backend - Distributed Microservices Framework", long_about = None)]
+struct Cli {
+    #[arg(short, long, default_value = "node-0")]
+    node_id: String,
 
-use tent_of_trials::health::{health_handler, init_startup_time};
+    #[arg(short, long)]
+    consensus: bool,
+
+    #[arg(long, default_value_t = 10000)]
+    max_connections: u32,
+
+    #[arg(short, long, default_value = "/etc/tent/config.toml")]
+    config: String,
+}
 
 #[tokio::main]
-async fn main() {
-    // Initialize startup time for uptime tracking
+async fn main() -> Result<()> {
+    // Initialize startup time for health endpoint uptime tracking
     init_startup_time();
 
-    // Build the application router
-    let app = Router::new()
-        .route("/health", get(health_handler));
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
+        .json()
+        .init();
 
-    // Bind to address
-    let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
-    println!("Server listening on {}", addr);
+    let cli = Cli::parse();
 
-    // Start the server
-    let listener = TcpListener::bind(addr).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+    tracing::info!(
+        node_id = %cli.node_id,
+        consensus = %cli.consensus,
+        max_connections = %cli.max_connections,
+        config = %cli.config,
+        "initializing tent backend orchestration framework"
+    );
+
+    let config = tent_backend::config::load_config(&cli.config).await?;
+    let registry = ServiceRegistry::new(config.registry.clone());
+    let discovery = ServiceDiscovery::new(config.discovery.clone());
+    let broker = MessageBroker::new(config.messaging.clone());
+
+    registry.initialize().await?;
+    discovery.announce(&cli.node_id).await?;
+    broker.connect().await?;
+
+    tracing::info!("all subsystems initialized successfully, entering main loop");
+
+    let mut signal = tokio::signal::unix::signal(
+        tokio::signal::unix::SignalKind::terminate(),
+    )?;
+
+    tokio::select! {
+        _ = signal.recv() => {
+            tracing::info!("received SIGTERM, initiating graceful shutdown");
+        }
+        _ = tokio::signal::ctrl_c() => {
+            tracing::info!("received SIGINT, initiating graceful shutdown");
+        }
+    }
+
+    broker.disconnect().await?;
+    discovery.withdraw(&cli.node_id).await?;
+    registry.shutdown().await?;
+
+    tracing::info!("shutdown complete");
+    Ok(())
 }
