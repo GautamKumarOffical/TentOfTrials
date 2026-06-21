@@ -236,6 +236,9 @@ int log_get_level(void);
  * The log message is written to the configured output (file or stderr).
  * Messages are truncated at 4096 bytes. Truncated messages get a
  * "[TRUNCATED]" suffix. The truncation is silent - no error is returned.
+ * If the configured log file cannot be written or flushed, the logger
+ * emits a diagnostic to stderr and falls back to stderr for subsequent
+ * messages.
  *
  * This function is thread-safe. It acquires a global mutex before
  * formatting and writing the message. For high-throughput logging,

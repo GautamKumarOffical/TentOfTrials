@@ -372,6 +372,13 @@ def clean_module(module: Module, verbose: bool = False) -> bool:
 def verify_binary(module: Module) -> Optional[str]:
     if module.build_dir is None:
         return None
+
+    def report_path(path: Path) -> str:
+        try:
+            return str(path.relative_to(ROOT))
+        except ValueError:
+            return str(path)
+
     path = module.build_dir
     if module.name == "backend":
 
@@ -379,9 +386,9 @@ def verify_binary(module: Module) -> Optional[str]:
         if not target.exists():
             target = path / "release" / module.name
         if target.exists():
-            return str(target)
+            return report_path(target)
     if path.exists():
-        return str(path)
+        return report_path(path)
     return None
 
 def run_cmd(cmd: list[str], **kwargs) -> tuple[bool, str]:
@@ -577,7 +584,17 @@ def generate_logd(
             timeout=300,
         )
         if sr.returncode != 0:
-            error = sr.stderr.strip() or sr.stdout.strip() or "encryptly pack failed"
+            stderr = sr.stderr.strip()
+            stdout = sr.stdout.strip()
+            if stderr:
+                error = stderr
+            elif stdout:
+                error = (
+                    f"encryptly pack exited {sr.returncode} without creating "
+                    f"{display_logd}; stdout was {len(stdout)} bytes"
+                )
+            else:
+                error = f"encryptly pack exited {sr.returncode}"
             print(
                 f"    {color('✗', Colors.RED)} {logd_path.relative_to(ROOT)} creation failed: "
                 f"{error}"
@@ -720,7 +737,7 @@ Diagnostic bundle:
         print(f"\n  {color('⚠ Some tools missing  -  will try anyway:', Colors.YELLOW)}")
         for m in missing:
             print(f"    {m}")
-        print(f"  {color('Not all modules will build. That\'s fine.', Colors.GRAY)}")
+        print("  " + color("Not all modules will build. That's fine.", Colors.GRAY))
     else:
         print(f"  {color('✓ All prerequisites found', Colors.GREEN)}")
 
