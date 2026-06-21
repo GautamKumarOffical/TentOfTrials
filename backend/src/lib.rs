@@ -7,6 +7,7 @@ pub mod connector;
 pub mod discovery;
 pub mod legacy;
 pub mod messaging;
+pub mod middleware;
 pub mod protocol;
 pub mod registry;
 

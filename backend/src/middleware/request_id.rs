@@ -1,15 +1,13 @@
 //! Request ID propagation middleware
-//! 
+//!
 //! Extracts or generates a unique request ID for each incoming request,
 //! propagates it through the request context, and includes it in the response.
 
 use std::task::{Context, Poll};
-use std::future::Future;
-use std::pin::Pin;
 use uuid::Uuid;
 
 /// The header name for request ID propagation
-pub const REQUEST_ID_HEADER: &str = "X-RK	uKt-ID";
+pub const REQUEST_ID_HEADER: &str = "X-Request-ID";
 
 /// Request ID that can be extracted from request extensions
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -78,7 +76,6 @@ pub struct RequestIdService<S> {
 impl<S, B> tower::Service<http::Request<B>> for RequestIdService<S>
 where
     S: tower::Service<http::Request<B>> + Clone + Send + 'static,
-    S::Response: Into<http::Response<http::Response<()>>>,
     S::Future: Send,
     B: Send + 'static,
 {
@@ -91,7 +88,6 @@ where
     }
 
     fn call(&mut self, mut req: http::Request<B>) -> Self::Future {
-        // Extract existing request ID or generate a new one
         let request_id = req
             .headers()
             .get(REQUEST_ID_HEADER)
@@ -99,9 +95,7 @@ where
             .map(|s| RequestId::from_string(s.to_string()))
             .unwrap_or_else(RequestId::new);
 
-        // Insert request ID into request extensions for downstream access
         req.extensions_mut().insert(request_id);
-
         self.inner.call(req)
     }
 }
