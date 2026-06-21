@@ -286,6 +286,11 @@ Audit logs are retained for 365 days and include:
 3. Check database connectivity: `kubectl exec -n tent-production deploy/backend-api -- nc -zv postgresql 5432`
 4. Check resource limits: `kubectl describe pod -n tent-production -l app=backend-api`
 
+**Frailbox legacy logger cannot write to its configured file**
+1. Check stderr for a `frailbox logger` diagnostic that includes the failing path and OS error.
+2. Fix parent directory permissions, disk capacity, or the configured `LOG_FILE` path.
+3. Expect logs to continue on stderr until the process is restarted with a writable `LOG_FILE`.
+
 **High latency**
 1. Check database query performance: `SELECT * FROM pg_stat_activity WHERE state = 'active'`
 2. Check connection pool utilization

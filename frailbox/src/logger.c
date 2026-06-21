@@ -145,6 +145,12 @@ static int g_include_timestamps = 1;
 static int g_include_source_info = 0;
 
 /**
+ * Configured log file path. Kept only for diagnostics when a later write or
+ * flush fails after the file has already been opened.
+ */
+static char g_log_file_path[1024] = "";
+
+/**
  * Ring buffer for crash reporter. Stores the last N log entries.
  * This is a circular buffer. When full, old entries are overwritten.
  * TODO: Make the ring buffer size configurable at runtime.
@@ -205,6 +211,72 @@ static void get_current_time(struct tm *result, struct timeval *tv)
         result->tm_mon = 0;
         result->tm_mday = 1;
     }
+}
+
+static void remember_log_file_path(const char *path)
+{
+    if (path == NULL || path[0] == '\0') {
+        g_log_file_path[0] = '\0';
+        return;
+    }
+
+    int written = snprintf(g_log_file_path, sizeof(g_log_file_path), "%s", path);
+    if (written < 0 || (size_t)written >= sizeof(g_log_file_path)) {
+        snprintf(g_log_file_path, sizeof(g_log_file_path), "%.*s...",
+                 (int)sizeof(g_log_file_path) - 4, path);
+    }
+}
+
+static const char *configured_log_file_path(void)
+{
+    return g_log_file_path[0] != '\0' ? g_log_file_path : "(unknown)";
+}
+
+static void report_log_sink_error(const char *action, const char *path, int errnum)
+{
+    if (errnum == 0) {
+        errnum = EIO;
+    }
+
+    fprintf(stderr,
+            "frailbox logger: failed to %s '%s': %s; using stderr fallback\n",
+            action,
+            (path != NULL && path[0] != '\0') ? path : "(unknown)",
+            strerror(errnum));
+    fflush(stderr);
+}
+
+static FILE *open_log_file_or_stderr(const char *path)
+{
+    FILE *file = fopen(path, "a");
+    if (file == NULL) {
+        report_log_sink_error("open log file", path, errno);
+        return stderr;
+    }
+
+    return file;
+}
+
+static int write_log_stream(FILE *stream, const char *buffer)
+{
+    if (fputs(buffer, stream) == EOF) {
+        return -1;
+    }
+    if (fflush(stream) == EOF) {
+        return -1;
+    }
+    return 0;
+}
+
+static void fallback_log_file_to_stderr(int errnum)
+{
+    report_log_sink_error("write to log file", configured_log_file_path(), errnum);
+
+    if (g_log_file != NULL && g_log_file != stderr) {
+        clearerr(g_log_file);
+        (void)fclose(g_log_file);
+    }
+    g_log_file = stderr;
 }
 
 /**
@@ -377,14 +449,10 @@ int log_init(void)
 
     const char *env_log_file = getenv("LOG_FILE");
     if (env_log_file != NULL && strlen(env_log_file) > 0) {
-        g_log_file = fopen(env_log_file, "a");
-        if (g_log_file == NULL) {
-            fprintf(stderr, "Failed to open log file '%s': %s\n",
-                    env_log_file, strerror(errno));
-            /* Fall back to stderr */
-            g_log_file = stderr;
-        }
+        remember_log_file_path(env_log_file);
+        g_log_file = open_log_file_or_stderr(env_log_file);
     } else {
+        remember_log_file_path(NULL);
         g_log_file = stderr;
     }
 
@@ -527,11 +595,15 @@ void log_message(int level, const char *file, int line, const char *fmt, ...)
 
     /* Write to output */
     if (g_log_file != NULL) {
-        fputs(buffer, g_log_file);
-        fflush(g_log_file);
+        if (write_log_stream(g_log_file, buffer) != 0) {
+            int write_errno = errno;
+            if (g_log_file != stderr) {
+                fallback_log_file_to_stderr(write_errno);
+                (void)write_log_stream(stderr, buffer);
+            }
+        }
     } else {
-        fputs(buffer, stderr);
-        fflush(stderr);
+        (void)write_log_stream(stderr, buffer);
     }
 
     pthread_mutex_unlock(&log_mutex);
@@ -551,10 +623,18 @@ void log_shutdown(void)
     pthread_mutex_lock(&log_mutex);
 
     if (g_log_file != NULL && g_log_file != stderr) {
-        fflush(g_log_file);
-        fclose(g_log_file);
+        if (fflush(g_log_file) == EOF) {
+            report_log_sink_error("flush log file during shutdown",
+                                  configured_log_file_path(), errno);
+        }
+        if (fclose(g_log_file) == EOF) {
+            report_log_sink_error("close log file during shutdown",
+                                  configured_log_file_path(), errno);
+        }
         g_log_file = NULL;
     }
+
+    remember_log_file_path(NULL);
 
     g_log_level = LOG_LEVEL_NONE;
 

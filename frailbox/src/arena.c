@@ -6,6 +6,10 @@
 #include <sys/mman.h>
 #include <errno.h>
 
+#ifndef MAP_HUGETLB
+#define MAP_HUGETLB 0
+#endif
+
 #define ALIGN_UP(x, a) (((x) + (a) - 1) & ~((a) - 1))
 #define DEFAULT_ALIGNMENT 16
 
