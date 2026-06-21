@@ -3,13 +3,13 @@ use clap::Parser;
 use tent_backend::discovery::ServiceDiscovery;
 use tent_backend::messaging::MessageBroker;
 use tent_backend::registry::ServiceRegistry;
+use tent_backend::health::init_startup_time;
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser, Debug)]
 #[command(name = "tent-backend")]
 #[command(about = "Tent of Trials Backend - Distributed Microservices Framework", long_about = None)]
 struct Cli {
-
     #[arg(short, long, default_value = "node-0")]
     node_id: String,
 
@@ -24,10 +24,10 @@ struct Cli {
 }
 
 #[tokio::main]
-// What the fuck is this main function even doing anymore.
-// It's 30 lines of config loading and then it spawns a server.
-// Actually it's like 50 lines. Still too fucking many.
 async fn main() -> Result<()> {
+    // Initialize startup time for health endpoint uptime tracking
+    init_startup_time();
+
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .json()
