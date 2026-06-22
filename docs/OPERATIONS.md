@@ -310,3 +310,56 @@ Audit logs are retained for 365 days and include:
 2. Update Kubernetes secret: `kubectl create secret tls tot-tls --cert=new.crt --key=new.key -n tent-production --dry-run=client -o yaml | kubectl apply -f -`
 3. Restart services: `kubectl rollout restart deployment -n tent-production`
 4. Verify new certificate: `openssl s_client -connect api.example.com:443 -servername api.example.com`
+
+## Diagnostic Metadata Comparison
+
+The diagnostic metadata comparison tool allows reviewers to compare two diagnostic build reports and quickly identify module status changes between builds.
+
+### Accessing the Comparison Tool
+
+Navigate to `/diagnostic-compare` in the frontend application to access the comparison interface.
+
+### Comparison Workflow
+
+1. **Upload Baseline Build**: Select the diagnostic JSON file from the previous build (baseline) using the "Baseline (Previous Build)" file input.
+
+2. **Upload Candidate Build**: Select the diagnostic JSON file from the current build (candidate) using the "Candidate (Current Build)" file input.
+
+3. **Run Comparison**: Click the "Compare Builds" button to analyze the differences between the two builds.
+
+### What the Comparison Shows
+
+The comparison tool identifies and displays:
+
+#### Module Changes
+- **Added**: Modules present in the candidate build but not in the baseline
+- **Removed**: Modules present in the baseline build but not in the candidate
+- **Changed**: Modules with different output or elapsed time (same status)
+- **Recovered**: Modules that changed from FAIL to PASS status
+- **Newly Failed**: Modules that changed from PASS to FAIL status
+
+#### Artifact Changes
+- Modules where the artifact path or count has changed
+- Artifact paths are displayed without encrypted log contents
+
+### Interpreting Results
+
+The summary section provides a quick overview:
+- **Added**: New modules introduced in the candidate build
+- **Removed**: Modules that were removed from the baseline build
+- **Recovered**: Modules that were fixed (FAIL -> PASS)
+- **Newly Failed**: Modules that broke (PASS -> FAIL)
+
+### Security Notes
+
+- The comparison tool does not display or expose encrypted log contents
+- Passwords and decrypt commands from the diagnostic metadata are not shown in comparison results
+- Only module status, output, and artifact paths are compared
+
+### Example Use Case
+
+When reviewing a PR that fixes a failing module:
+1. Upload the baseline diagnostic JSON from the previous successful build
+2. Upload the candidate diagnostic JSON from the current PR build
+3. Run the comparison to verify the module has recovered from FAIL to PASS
+4. Check that no other modules have become newly failed

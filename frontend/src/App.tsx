@@ -4,6 +4,7 @@ import Layout from './components/Layout';
 import Dashboard from './pages/Dashboard';
 import Analytics from './pages/Analytics';
 import Settings from './pages/Settings';
+import DiagnosticCompare from './pages/DiagnosticCompare';
 
 const App: React.FC = () => {
   return (
@@ -12,6 +13,7 @@ const App: React.FC = () => {
         <Route path="/" element={<Dashboard />} />
         <Route path="/analytics" element={<Analytics />} />
         <Route path="/settings" element={<Settings />} />
+        <Route path="/diagnostic-compare" element={<DiagnosticCompare />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Layout>
