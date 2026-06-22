@@ -181,16 +181,70 @@ addResponseInterceptor(<T>(response: ApiResponse<T>): ApiResponse<T> => {
 
 // Default error interceptor: handles common error patterns
 addErrorInterceptor((error: ApiError): ApiError => {
-  if (error.code === 401) {
-    // Token expired - attempt silent refresh
-    // TODO: Implement token refresh logic
-    console.warn('[API] Authentication failed, attempting token refresh...');
-  }
   if (error.code === 429) {
     console.warn('[API] Rate limit exceeded, retrying with backoff...');
   }
   return error;
 });
+
+// ---------------------------------------------------------------------------
+// TOKEN REFRESH
+// ---------------------------------------------------------------------------
+
+let refreshPromise: Promise<boolean> | null = null;
+
+async function refreshAccessToken(): Promise<boolean> {
+  const refreshToken = localStorage.getItem('refresh_token');
+  if (!refreshToken) {
+    return false;
+  }
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/auth/refresh`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+      body: JSON.stringify({ refresh_token: refreshToken }),
+    });
+
+    if (!response.ok) {
+      clearAuthState();
+      return false;
+    }
+
+    const data = await response.json();
+    if (data.access_token) {
+      localStorage.setItem('auth_token', data.access_token);
+    }
+    if (data.refresh_token) {
+      localStorage.setItem('refresh_token', data.refresh_token);
+    }
+    return true;
+  } catch {
+    clearAuthState();
+    return false;
+  }
+}
+
+function clearAuthState(): void {
+  localStorage.removeItem('auth_token');
+  localStorage.removeItem('refresh_token');
+}
+
+async function attemptTokenRefreshOnce(): Promise<boolean> {
+  if (refreshPromise) {
+    return refreshPromise;
+  }
+
+  refreshPromise = refreshAccessToken();
+  try {
+    return await refreshPromise;
+  } finally {
+    refreshPromise = null;
+  }
+}
 
 function generateTraceId(): string {
   return `tot-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -224,6 +278,7 @@ async function request<T>(
   }
 
   let lastError: Error | null = null;
+  let refreshed = false;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
@@ -233,6 +288,24 @@ async function request<T>(
 
       const response = await fetch(requestConfig.url, requestConfig);
       clearTimeout(timeoutId);
+
+      if (response.status === 401 && !refreshed) {
+        refreshed = true;
+        const refreshSucceeded = await attemptTokenRefreshOnce();
+        if (refreshSucceeded) {
+          // Rebuild request config with new token
+          requestConfig = {
+            url,
+            method,
+            headers: {} as Record<string, string>,
+            body: data ? JSON.stringify(data) : undefined,
+          };
+          for (const interceptor of requestInterceptors) {
+            requestConfig = interceptor(requestConfig);
+          }
+          continue;
+        }
+      }
 
       const responseData = await parseResponse<T>(response);
 
