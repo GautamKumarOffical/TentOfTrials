@@ -15,6 +15,18 @@
 
 ## Monitoring
 
+### Backend Log Format
+
+The backend emits a `backend_log_format` field at startup indicating which
+tracing output format is active. This lets operators confirm `text` or `json`
+mode from the first log line without inspecting environment variables.
+
+| Env Variable | Values | Default | Description |
+|---|---|---|---|
+| `TOT_LOG_FORMAT` | `text`, `json` | `text` | Controls tracing output format |
+
+An invalid value causes the backend to fail at startup with a descriptive error.
+
 ### Health Check Endpoints
 
 Each service exposes a health check endpoint:

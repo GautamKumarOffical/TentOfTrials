@@ -1,9 +1,9 @@
 use anyhow::Result;
 use clap::Parser;
 use tent_backend::discovery::ServiceDiscovery;
+use tent_backend::logging;
 use tent_backend::messaging::MessageBroker;
 use tent_backend::registry::ServiceRegistry;
-use tracing_subscriber::EnvFilter;
 
 #[derive(Parser, Debug)]
 #[command(name = "tent-backend")]
@@ -28,10 +28,7 @@ struct Cli {
 // It's 30 lines of config loading and then it spawns a server.
 // Actually it's like 50 lines. Still too fucking many.
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
-        .json()
-        .init();
+    logging::init_logging()?;
 
     let cli = Cli::parse();
 
