@@ -15,6 +15,26 @@
 
 ## Monitoring
 
+### Frailbox Legacy Logger Fallbacks
+
+The legacy frailbox logger keeps stderr as the guaranteed fallback sink. When
+`LOG_FILE` cannot be opened, the logger reports the failed operation, path,
+`errno` text, and a short likely-cause hint before continuing on stderr. When a
+configured log file opens successfully but later fails during `fputs` or
+`fflush`, the logger closes that file, switches to stderr, reports the write
+failure, and replays the current log line to stderr so the triggering message is
+not lost.
+
+The focused logger fallback harness does not require external services:
+
+```bash
+cd frailbox
+make logger-error-test
+```
+
+The harness verifies the missing-path open fallback and, on Linux hosts with
+`/dev/full`, the write-failure fallback path.
+
 ### Health Check Endpoints
 
 Each service exposes a health check endpoint:

@@ -37,7 +37,11 @@ distclean: clean
 test: $(TARGET)
 	./$(TARGET) --sandbox-type seccomp --memory-limit 64 --verbose
 
+logger-error-test:
+	$(CC) $(CFLAGS) -I$(INCDIR) src/logger.c tests/test_logger_errors.c -o $(BUILDDIR)/test_logger_errors -lpthread
+	./$(BUILDDIR)/test_logger_errors
+
 valgrind: $(TARGET)
 	valgrind --leak-check=full --show-leak-kinds=all ./$(TARGET)
 
-.PHONY: all clean distclean test valgrind
+.PHONY: all clean distclean test logger-error-test valgrind

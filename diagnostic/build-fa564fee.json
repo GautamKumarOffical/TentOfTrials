@@ -1,0 +1,87 @@
+{
+  "generated_at": "2026-06-27T02:49:23.678788+00:00",
+  "commit": "fa564fee",
+  "diagnostic_logd": "diagnostic\\build-fa564fee.logd",
+  "diagnostic_logd_error": null,
+  "message_blocker": null,
+  "chunked": false,
+  "chunk_size_bytes": null,
+  "password": "8975709d4cc274107416",
+  "decrypt_command": "encryptly unpack diagnostic\\build-fa564fee.logd <outdir> --password 8975709d4cc274107416",
+  "total_modules": 10,
+  "passed": 0,
+  "failed": 10,
+  "modules": [
+    {
+      "name": "backend",
+      "status": "FAIL",
+      "elapsed_seconds": 0,
+      "artifact": null,
+      "output": "Command not found: [WinError 2] El sistema no puede encontrar el archivo especificado"
+    },
+    {
+      "name": "frontend",
+      "status": "FAIL",
+      "elapsed_seconds": 0,
+      "artifact": null,
+      "output": "Command not found: [WinError 2] El sistema no puede encontrar el archivo especificado"
+    },
+    {
+      "name": "market",
+      "status": "FAIL",
+      "elapsed_seconds": 0,
+      "artifact": null,
+      "output": "Command not found: [WinError 2] El sistema no puede encontrar el archivo especificado"
+    },
+    {
+      "name": "frailbox",
+      "status": "FAIL",
+      "elapsed_seconds": 0,
+      "artifact": null,
+      "output": "Command not found: [WinError 2] El sistema no puede encontrar el archivo especificado"
+    },
+    {
+      "name": "engine",
+      "status": "FAIL",
+      "elapsed_seconds": 0,
+      "artifact": null,
+      "output": "Command not found: [WinError 2] El sistema no puede encontrar el archivo especificado"
+    },
+    {
+      "name": "compliance",
+      "status": "FAIL",
+      "elapsed_seconds": 0,
+      "artifact": null,
+      "output": "Command not found: [WinError 2] El sistema no puede encontrar el archivo especificado"
+    },
+    {
+      "name": "v2-market-stream",
+      "status": "FAIL",
+      "elapsed_seconds": 0,
+      "artifact": null,
+      "output": "Command not found: [WinError 2] El sistema no puede encontrar el archivo especificado"
+    },
+    {
+      "name": "nfc-scanner",
+      "status": "FAIL",
+      "elapsed_seconds": 0,
+      "artifact": null,
+      "output": "Command not found: [WinError 2] El sistema no puede encontrar el archivo especificado"
+    },
+    {
+      "name": "openapi-haskell",
+      "status": "FAIL",
+      "elapsed_seconds": 0,
+      "artifact": null,
+      "output": "Command not found: [WinError 2] El sistema no puede encontrar el archivo especificado"
+    },
+    {
+      "name": "openapi-tools",
+      "status": "FAIL",
+      "elapsed_seconds": 0,
+      "artifact": null,
+      "output": "Command not found: [WinError 2] El sistema no puede encontrar el archivo especificado"
+    }
+  ],
+  "pr_note": "Include the encrypted diagnostic logd artifact(s): diagnostic\\build-fa564fee.logd. The encrypted .logd is the required diagnostic content for PR review; this JSON file is metadata. Maintainers may ask you to remove these diagnostic artifacts before merging."
+}

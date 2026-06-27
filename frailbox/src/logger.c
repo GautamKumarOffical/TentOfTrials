@@ -130,6 +130,12 @@ static int g_log_level = DEFAULT_LOG_LEVEL;
 static FILE *g_log_file = NULL;
 
 /**
+ * Path for the active log file. This is only used in diagnostics when a
+ * file operation fails and the logger has to fall back to stderr.
+ */
+static char g_log_file_path[1024] = "stderr";
+
+/**
  * Whether to include timestamps in log output.
  * This can be disabled for performance-critical logging paths.
  * TODO: Remove this option and always include timestamps.
@@ -180,6 +186,100 @@ static pid_t g_pid = 0;
 /* ------------------------------------------------------------------ */
 /* INTERNAL HELPERS                                                    */
 /* ------------------------------------------------------------------ */
+
+static const char *logger_errno_hint(int error_code)
+{
+    switch (error_code) {
+        case EACCES:
+            return "permission denied";
+        case ENOENT:
+            return "path or parent directory does not exist";
+        case EISDIR:
+            return "path is a directory";
+        case ENOSPC:
+            return "device is full";
+        case EROFS:
+            return "filesystem is read-only";
+        case EIO:
+            return "I/O error";
+        default:
+            return "see errno for details";
+    }
+}
+
+static void set_log_path_unlocked(const char *path)
+{
+    const char *source = (path != NULL && path[0] != '\0') ? path : "stderr";
+    strncpy(g_log_file_path, source, sizeof(g_log_file_path) - 1);
+    g_log_file_path[sizeof(g_log_file_path) - 1] = '\0';
+}
+
+static void close_log_file_unlocked(void)
+{
+    if (g_log_file != NULL && g_log_file != stderr) {
+        if (fflush(g_log_file) == EOF) {
+            fprintf(stderr,
+                    "Legacy logger: failed to flush log file '%s' before close: %s (%s)\n",
+                    g_log_file_path, strerror(errno), logger_errno_hint(errno));
+            clearerr(g_log_file);
+        }
+        if (fclose(g_log_file) == EOF) {
+            fprintf(stderr,
+                    "Legacy logger: failed to close log file '%s': %s (%s)\n",
+                    g_log_file_path, strerror(errno), logger_errno_hint(errno));
+        }
+    }
+    g_log_file = stderr;
+    set_log_path_unlocked("stderr");
+}
+
+static void fallback_to_stderr_unlocked(const char *operation,
+                                        const char *path,
+                                        int error_code)
+{
+    const char *target = (path != NULL && path[0] != '\0') ? path : g_log_file_path;
+
+    fprintf(stderr,
+            "Legacy logger: %s failed for log file '%s': %s (%s); falling back to stderr.\n",
+            operation, target, strerror(error_code), logger_errno_hint(error_code));
+
+    if (g_log_file != NULL && g_log_file != stderr) {
+        clearerr(g_log_file);
+        fclose(g_log_file);
+    }
+    g_log_file = stderr;
+    set_log_path_unlocked("stderr");
+}
+
+static int write_log_line_unlocked(const char *buffer)
+{
+    FILE *target = (g_log_file != NULL) ? g_log_file : stderr;
+
+    errno = 0;
+    if (fputs(buffer, target) == EOF || fflush(target) == EOF) {
+        int saved_errno = (errno != 0) ? errno : EIO;
+
+        if (target != stderr) {
+            char failed_path[sizeof(g_log_file_path)];
+            strncpy(failed_path, g_log_file_path, sizeof(failed_path) - 1);
+            failed_path[sizeof(failed_path) - 1] = '\0';
+
+            fallback_to_stderr_unlocked("write", failed_path, saved_errno);
+
+            errno = 0;
+            if (fputs(buffer, stderr) == EOF || fflush(stderr) == EOF) {
+                clearerr(stderr);
+                return -1;
+            }
+            return 0;
+        }
+
+        clearerr(stderr);
+        return -1;
+    }
+
+    return 0;
+}
 
 /**
  * Gets the current time as a struct tm. Thread-safe.
@@ -354,6 +454,13 @@ int log_init(void)
 
     /* Cache PID */
     g_pid = getpid();
+    g_log_level = DEFAULT_LOG_LEVEL;
+    g_include_timestamps = 1;
+    g_include_source_info = 0;
+    strncpy(g_module_name, "frailbox", sizeof(g_module_name) - 1);
+    g_module_name[sizeof(g_module_name) - 1] = '\0';
+
+    close_log_file_unlocked();
 
     /* Read environment variables */
     const char *env_level = getenv("LOG_LEVEL");
@@ -379,13 +486,14 @@ int log_init(void)
     if (env_log_file != NULL && strlen(env_log_file) > 0) {
         g_log_file = fopen(env_log_file, "a");
         if (g_log_file == NULL) {
-            fprintf(stderr, "Failed to open log file '%s': %s\n",
-                    env_log_file, strerror(errno));
-            /* Fall back to stderr */
-            g_log_file = stderr;
+            int saved_errno = (errno != 0) ? errno : EIO;
+            fallback_to_stderr_unlocked("open", env_log_file, saved_errno);
+        } else {
+            set_log_path_unlocked(env_log_file);
         }
     } else {
         g_log_file = stderr;
+        set_log_path_unlocked("stderr");
     }
 
     const char *env_module = getenv("LOG_MODULE");
@@ -526,13 +634,7 @@ void log_message(int level, const char *file, int line, const char *fmt, ...)
     }
 
     /* Write to output */
-    if (g_log_file != NULL) {
-        fputs(buffer, g_log_file);
-        fflush(g_log_file);
-    } else {
-        fputs(buffer, stderr);
-        fflush(stderr);
-    }
+    (void)write_log_line_unlocked(buffer);
 
     pthread_mutex_unlock(&log_mutex);
 
@@ -550,11 +652,7 @@ void log_shutdown(void)
 {
     pthread_mutex_lock(&log_mutex);
 
-    if (g_log_file != NULL && g_log_file != stderr) {
-        fflush(g_log_file);
-        fclose(g_log_file);
-        g_log_file = NULL;
-    }
+    close_log_file_unlocked();
 
     g_log_level = LOG_LEVEL_NONE;
 
@@ -596,7 +694,10 @@ int log_dump_ring_buffer(int fd)
     written += snprintf(ring_buf + written, sizeof(ring_buf) - written,
         "=== END RING BUFFER DUMP ===\n");
     ssize_t _written = write(fd, ring_buf, written);
-    (void)_written;  // suppress unused-result warning. the ring buffer dump is best-effort.
+    if (_written < 0) {
+        pthread_mutex_unlock(&g_ring_buffer.ring_mutex);
+        return -1;
+    }
 
     pthread_mutex_unlock(&g_ring_buffer.ring_mutex);
     return count;
