@@ -85,6 +85,26 @@ Alerts are sent to PagerDuty and Slack (#ops-alerts channel).
 | DBConnectionPool | Pool exhaustion risk | Critical | 10 minutes |
 | QueueBacklog | Queue depth > 10000 for 5 minutes | Warning | 15 minutes |
 
+### Frailbox Legacy Logger File Failures
+
+The C frailbox components still use the legacy logger in
+`frailbox/src/logger.c`. When `LOG_FILE` points to a path that cannot be
+opened, configured for line buffering, written, flushed, or closed, the logger
+prints a diagnostic message to `stderr` and continues logging to `stderr`
+instead of aborting the process.
+
+Operators can check whether the fallback path was used by calling
+`log_get_fallback_count()` from a test harness or diagnostic build. The
+repository includes a focused harness for the common failure modes:
+
+```bash
+cd frailbox
+make test-logger-errors
+```
+
+The harness verifies normal file logging, fallback when the configured log file
+cannot be opened, and fallback when writes fail after a file was opened.
+
 ## Incident Response
 
 ### Severity Levels
