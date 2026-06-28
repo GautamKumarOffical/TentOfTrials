@@ -230,6 +230,15 @@ void log_set_level(int level);
 int log_get_level(void);
 
 /**
+ * Get the number of times the legacy logger had to fall back to stderr.
+ * This is primarily useful for diagnostics and regression tests around
+ * file-open, write, flush, and close failures.
+ *
+ * @return Number of fallback events observed in this process
+ */
+unsigned int log_get_fallback_count(void);
+
+/**
  * Log a formatted message at the specified level.
  * This is the core logging function. All LOG_* macros call this.
  *
