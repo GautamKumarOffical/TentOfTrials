@@ -128,6 +128,8 @@ static int g_log_level = DEFAULT_LOG_LEVEL;
  * TODO: Add automatic log file reopening after SIGHUP.
  */
 static FILE *g_log_file = NULL;
+static int g_log_file_is_stderr = 1;
+static unsigned int g_log_fallback_count = 0;
 
 /**
  * Whether to include timestamps in log output.
@@ -176,6 +178,24 @@ static char g_module_name[64] = "frailbox";
  * TODO: Re-retrieve PID after fork().
  */
 static pid_t g_pid = 0;
+
+static void logger_fallback_to_stderr(const char *operation,
+                                      const char *path,
+                                      int errnum)
+{
+    const char *safe_operation = operation != NULL ? operation : "log file operation";
+    const char *safe_path = path != NULL ? path : "<configured log stream>";
+
+    fprintf(stderr, "Legacy logger: %s failed for '%s': %s; falling back to stderr\n",
+            safe_operation, safe_path, strerror(errnum));
+
+    if (g_log_file != NULL && g_log_file != stderr) {
+        fclose(g_log_file);
+    }
+    g_log_file = stderr;
+    g_log_file_is_stderr = 1;
+    g_log_fallback_count++;
+}
 
 /* ------------------------------------------------------------------ */
 /* INTERNAL HELPERS                                                    */
@@ -377,15 +397,18 @@ int log_init(void)
 
     const char *env_log_file = getenv("LOG_FILE");
     if (env_log_file != NULL && strlen(env_log_file) > 0) {
+        errno = 0;
         g_log_file = fopen(env_log_file, "a");
         if (g_log_file == NULL) {
-            fprintf(stderr, "Failed to open log file '%s': %s\n",
-                    env_log_file, strerror(errno));
-            /* Fall back to stderr */
-            g_log_file = stderr;
+            logger_fallback_to_stderr("open", env_log_file, errno);
+        } else if (setvbuf(g_log_file, NULL, _IOLBF, 0) != 0) {
+            logger_fallback_to_stderr("configure buffering", env_log_file, errno);
+        } else {
+            g_log_file_is_stderr = 0;
         }
     } else {
         g_log_file = stderr;
+        g_log_file_is_stderr = 1;
     }
 
     const char *env_module = getenv("LOG_MODULE");
@@ -443,6 +466,15 @@ int log_get_level(void)
     level = g_log_level;
     pthread_mutex_unlock(&log_mutex);
     return level;
+}
+
+unsigned int log_get_fallback_count(void)
+{
+    unsigned int count;
+    pthread_mutex_lock(&log_mutex);
+    count = g_log_fallback_count;
+    pthread_mutex_unlock(&log_mutex);
+    return count;
 }
 
 /**
@@ -525,13 +557,18 @@ void log_message(int level, const char *file, int line, const char *fmt, ...)
         buffer[total_len + 1] = '\0';
     }
 
-    /* Write to output */
-    if (g_log_file != NULL) {
-        fputs(buffer, g_log_file);
-        fflush(g_log_file);
-    } else {
-        fputs(buffer, stderr);
-        fflush(stderr);
+    /* Write to output; fall back to stderr if the configured file fails. */
+    FILE *target = g_log_file != NULL ? g_log_file : stderr;
+    errno = 0;
+    if (fputs(buffer, target) == EOF || fflush(target) == EOF) {
+        int write_errno = errno != 0 ? errno : EIO;
+        if (!g_log_file_is_stderr) {
+            logger_fallback_to_stderr("write", getenv("LOG_FILE"), write_errno);
+            fputs(buffer, stderr);
+            fflush(stderr);
+        } else {
+            fprintf(stderr, "Legacy logger: stderr write failed: %s\n", strerror(write_errno));
+        }
     }
 
     pthread_mutex_unlock(&log_mutex);
@@ -551,10 +588,19 @@ void log_shutdown(void)
     pthread_mutex_lock(&log_mutex);
 
     if (g_log_file != NULL && g_log_file != stderr) {
-        fflush(g_log_file);
-        fclose(g_log_file);
+        if (fflush(g_log_file) == EOF) {
+            logger_fallback_to_stderr("flush during shutdown", getenv("LOG_FILE"), errno != 0 ? errno : EIO);
+        } else if (fclose(g_log_file) == EOF) {
+            fprintf(stderr, "Legacy logger: close during shutdown failed for '%s': %s; falling back to stderr\n",
+                    getenv("LOG_FILE") != NULL ? getenv("LOG_FILE") : "<configured log stream>",
+                    strerror(errno != 0 ? errno : EIO));
+            g_log_file = stderr;
+            g_log_file_is_stderr = 1;
+            g_log_fallback_count++;
+        }
         g_log_file = NULL;
     }
+    g_log_file_is_stderr = 1;
 
     g_log_level = LOG_LEVEL_NONE;
 
