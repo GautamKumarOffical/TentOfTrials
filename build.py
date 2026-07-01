@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+"""Orchestrate multi-language Tent of Trials builds and encrypted diagnostic artifacts."""
 
 import argparse
 import datetime
@@ -12,7 +13,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 ROOT = Path(__file__).resolve().parent
 DIAGNOSTIC_DIR = ROOT / "diagnostic"
@@ -257,6 +258,67 @@ def check_prerequisites() -> list[str]:
 
     return missing
 
+
+def parse_module_names(raw: str) -> list[str]:
+    """Parse comma-separated module names, allowing optional spaces."""
+    return [part.strip() for part in raw.split(",") if part.strip()]
+
+
+def validate_module_names(names: list[str]) -> tuple[list[Module], list[str]]:
+    """Return selected modules and any unknown module names."""
+    available = {module.name for module in MODULES}
+    unknown = sorted({name for name in names if name not in available})
+    selected = [module for module in MODULES if module.name in names]
+    return selected, unknown
+
+
+def list_modules() -> None:
+    """Print module names, languages, directories, and build commands."""
+    print(f"  {color('Available modules:', Colors.BOLD)}")
+    for module in MODULES:
+        print(f"    {color(module.name, Colors.CYAN)} ({module.language})")
+        print(f"      dir: {module.dir.relative_to(ROOT)}")
+        print(f"      build: {' '.join(module.build_cmd)}")
+
+
+def build_module_timing_entry(
+    module: Module,
+    *,
+    started_at: datetime.datetime,
+    finished_at: datetime.datetime,
+    elapsed: float,
+    success: bool,
+    command: list[str],
+) -> dict[str, Any]:
+    return {
+        "module": module.name,
+        "language": module.language,
+        "command": command,
+        "started_at": started_at.isoformat(),
+        "finished_at": finished_at.isoformat(),
+        "elapsed_seconds": round(elapsed, 3),
+        "exit_code": 0 if success else 1,
+        "status": "PASS" if success else "FAIL",
+    }
+
+
+def print_timing_summary(timings: list[dict[str, Any]]) -> None:
+    if not timings:
+        return
+    print(f"\n  {color('Module timings (slowest first):', Colors.BOLD)}")
+    for entry in sorted(timings, key=lambda item: item["elapsed_seconds"], reverse=True):
+        status = color(entry["status"], Colors.GREEN if entry["status"] == "PASS" else Colors.RED)
+        print(
+            f"    {entry['module']:<18} {status}  "
+            f"{entry['elapsed_seconds']:.1f}s  ({entry['language']})"
+        )
+
+
+def write_timings_json(path: Path, timings: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"module_timings": timings}, indent=2) + "\n", encoding="utf-8")
+
+
 def build_module(
     module: Module,
     release: bool = False,
@@ -430,6 +492,7 @@ def collect_system_info() -> str:
 def generate_logd(
     results: list[tuple[str, bool, float, str, Optional[str]]],
     verbose: bool = False,
+    module_timings: Optional[list[dict[str, Any]]] = None,
 ) -> bool:
     logd_path, metadata_path, commit_id = diagnostic_paths_for_commit()
     display_logd = logd_path.relative_to(ROOT)
@@ -536,6 +599,7 @@ def generate_logd(
                 }
                 for name, success, elapsed, _, binary in results
             ],
+            "module_timings": module_timings or [],
             "pr_note": (
                 f"Include this metadata and {', '.join(logd_relpaths)} in your PR. "
                 "Maintainers may ask you to remove these diagnostic artifacts before merging."
@@ -600,6 +664,24 @@ def print_summary(results: list[tuple[str, bool, float, str, Optional[str]]]):
           f"{color(str(failed) + ' failed', Colors.RED)}, "
           f"{total_time:.1f}s total")
 
+
+def select_modules(raw: str) -> tuple[list[Module], int]:
+    """Resolve module selection or return exit code 1 when names are invalid."""
+    if raw == "all":
+        return MODULES, 0
+    names = parse_module_names(raw)
+    selected, unknown = validate_module_names(names)
+    if unknown:
+        print(f"  {color('✗ Unknown modules:', Colors.RED)} {', '.join(unknown)}")
+        print(f"    Valid options: {', '.join(module.name for module in MODULES)}")
+        list_modules()
+        return [], 1
+    if not selected:
+        print(f"  {color('✗ No modules selected.', Colors.RED)}")
+        list_modules()
+        return [], 1
+    return selected, 0
+
 def main():
     parser = argparse.ArgumentParser(
         description="Tent of Trials  -  Multi-Language Build System",
@@ -636,7 +718,16 @@ Diagnostic bundle:
     )
     parser.add_argument(
         "--list", action="store_true",
-        help="List available modules and exit",
+        help="List available modules and exit (alias for --list-modules)",
+    )
+    parser.add_argument(
+        "--list-modules", action="store_true",
+        help="List available modules with language, directory, and build command",
+    )
+    parser.add_argument(
+        "--timings-json",
+        help="Write structured module timing report to the given JSON path",
+        default=None,
     )
 
     args = parser.parse_args()
@@ -645,12 +736,8 @@ Diagnostic bundle:
     print(f"  Working directory: {ROOT}")
     print()
 
-    if args.list:
-        print(f"  {color('Available modules:', Colors.BOLD)}")
-        for m in MODULES:
-            print(f"    {color(m.name, Colors.CYAN)} ({m.language})")
-            print(f"      dir: {m.dir.relative_to(ROOT)}")
-            print(f"      build: {' '.join(m.build_cmd)}")
+    if args.list_modules or args.list:
+        list_modules()
         return 0
 
     print(f"  {color('Checking prerequisites...', Colors.GRAY)}")
@@ -663,20 +750,9 @@ Diagnostic bundle:
     else:
         print(f"  {color('✓ All prerequisites found', Colors.GREEN)}")
 
-    if args.module == "all":
-        selected = MODULES
-    else:
-        names = [n.strip() for n in args.module.split(",")]
-        selected = [m for m in MODULES if m.name in names]
-        not_found = set(names) - {m.name for m in MODULES}
-        if not_found:
-            print(f"  {color('✗ Unknown modules:', Colors.RED)} {', '.join(not_found)}")
-            print(f"    Available: {', '.join(m.name for m in MODULES)}")
-            return 1
-
-    if not selected:
-        print(f"  No modules selected.")
-        return 0
+    selected, selection_code = select_modules(args.module)
+    if selection_code != 0:
+        return selection_code
 
     if args.clean:
         print(f"\n  {color('Cleaning build artifacts...', Colors.YELLOW)}")
@@ -701,15 +777,37 @@ Diagnostic bundle:
     print(f"\n  {color(f'Building {len(selected)} module(s) | release={args.release}', Colors.GRAY)}")
 
     results: list[tuple[str, bool, float, str, Optional[str]]] = []
+    module_timings: list[dict[str, Any]] = []
 
     for module in selected:
+        started_at = datetime.datetime.now(datetime.timezone.utc)
         success, elapsed, output = build_module(module, args.release, args.verbose)
+        finished_at = datetime.datetime.now(datetime.timezone.utc)
+        command = list(module.build_cmd)
+        if module.name == "engine":
+            command = ["cmake", "--build", "build"]
+        module_timings.append(
+            build_module_timing_entry(
+                module,
+                started_at=started_at,
+                finished_at=finished_at,
+                elapsed=elapsed,
+                success=success,
+                command=command,
+            )
+        )
         binary = verify_binary(module) if success else None
         results.append((module.name, success, elapsed, output, binary))
 
     print_summary(results)
+    print_timing_summary(module_timings)
 
-    generate_logd(results, args.verbose)
+    if args.timings_json:
+        timings_path = Path(args.timings_json)
+        write_timings_json(timings_path, module_timings)
+        print(f"  {color('✓', Colors.GREEN)} wrote timing report to {timings_path}")
+
+    generate_logd(results, args.verbose, module_timings)
 
     return 0 if all(r[1] for r in results) else 1
 
