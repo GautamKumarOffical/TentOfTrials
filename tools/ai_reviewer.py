@@ -37,7 +37,7 @@ from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from enum import Enum, auto
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple, TypedDict
 
 # Configure logging
 logging.basicConfig(
@@ -354,13 +354,22 @@ class CodeQualityAnalyzer:
 # ---------------------------------------------------------------------------
 
 
+class SecurityPattern(TypedDict):
+    id: str
+    name: str
+    severity: ReviewSeverity
+    pattern: str
+    message: str
+    effort: int
+
+
 class SecurityAuditor:
     """Detects security vulnerabilities using AI pattern matching."""
 
-    def __init__(self):
-        self.patterns: List[Dict[str, Any]] = self._initialize_patterns()
+    def __init__(self) -> None:
+        self.patterns: List[SecurityPattern] = self._initialize_patterns()
 
-    def _initialize_patterns(self) -> List[Dict[str, Any]]:
+    def _initialize_patterns(self) -> List[SecurityPattern]:
         """Initialize security vulnerability patterns."""
         return [
             {
