@@ -562,6 +562,12 @@ func (g *Gateway) handleLiveness() http.HandlerFunc {
 func (g *Gateway) handleMetrics() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		stats := g.Stats()
+		if r.URL.Query().Get("format") == "prometheus" {
+			w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(FormatPrometheusMetrics(stats)))
+			return
+		}
 		writeJSON(w, http.StatusOK, stats)
 	}
 }
