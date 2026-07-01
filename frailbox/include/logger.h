@@ -333,6 +333,16 @@ void log_hex_dump(const char *label, const unsigned char *data, size_t len);
  */
 int log_assert(int condition, const char *expr, const char *file, int line);
 
+/**
+ * Returns non-zero when LOG_FILE could not be opened and stderr fallback is active.
+ */
+int log_uses_stderr_fallback(void);
+
+/**
+ * Returns the most recent logger file I/O error message, or NULL if none.
+ */
+const char *log_last_io_error(void);
+
 #ifdef __cplusplus
 }
 #endif
