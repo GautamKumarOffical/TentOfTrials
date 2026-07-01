@@ -130,6 +130,16 @@ static int g_log_level = DEFAULT_LOG_LEVEL;
 static FILE *g_log_file = NULL;
 
 /**
+ * True when LOG_FILE was requested but could not be opened; output uses stderr.
+ */
+static int g_log_file_fallback = 0;
+
+/**
+ * Last file I/O error message for diagnostics/tests (single-line, no newline).
+ */
+static char g_last_io_error[256] = "";
+
+/**
  * Whether to include timestamps in log output.
  * This can be disabled for performance-critical logging paths.
  * TODO: Remove this option and always include timestamps.
@@ -180,6 +190,92 @@ static pid_t g_pid = 0;
 /* ------------------------------------------------------------------ */
 /* INTERNAL HELPERS                                                    */
 /* ------------------------------------------------------------------ */
+
+static void set_last_io_error(const char *message)
+{
+    if (message == NULL) {
+        g_last_io_error[0] = '\0';
+        return;
+    }
+    snprintf(g_last_io_error, sizeof(g_last_io_error), "%s", message);
+}
+
+static const char *describe_open_failure(int err)
+{
+    switch (err) {
+        case EACCES:
+            return "permission denied";
+        case ENOENT:
+            return "parent directory or file path missing";
+        case EISDIR:
+            return "path is a directory, not a file";
+        case ENOSPC:
+            return "disk full";
+        case EROFS:
+            return "read-only filesystem";
+        case EMFILE:
+        case ENFILE:
+            return "too many open files";
+        default:
+            return strerror(err);
+    }
+}
+
+static void report_open_failure(const char *path, int err)
+{
+    char message[512];
+    snprintf(message, sizeof(message),
+             "legacy logger: cannot open LOG_FILE '%s' (%s); falling back to stderr",
+             path, describe_open_failure(err));
+    set_last_io_error(message);
+    fprintf(stderr, "%s\n", message);
+}
+
+static int write_log_line_locked(const char *buffer)
+{
+    FILE *target = g_log_file != NULL ? g_log_file : stderr;
+
+    if (fputs(buffer, target) == EOF) {
+        int err = errno;
+        char message[512];
+        snprintf(message, sizeof(message),
+                 "legacy logger: write failed (%s); retrying on stderr",
+                 strerror(err));
+        set_last_io_error(message);
+        fprintf(stderr, "%s\n", message);
+        if (target != stderr) {
+            g_log_file_fallback = 1;
+            if (fputs(buffer, stderr) == EOF) {
+                return -1;
+            }
+            if (fflush(stderr) != 0) {
+                return -1;
+            }
+            return 0;
+        }
+        return -1;
+    }
+
+    if (fflush(target) != 0) {
+        int err = errno;
+        char message[512];
+        snprintf(message, sizeof(message),
+                 "legacy logger: flush failed (%s); retrying on stderr",
+                 strerror(err));
+        set_last_io_error(message);
+        fprintf(stderr, "%s\n", message);
+        if (target != stderr) {
+            g_log_file_fallback = 1;
+            if (fputs(buffer, stderr) == EOF || fflush(stderr) != 0) {
+                return -1;
+            }
+            return 0;
+        }
+        return -1;
+    }
+
+    return 0;
+}
 
 /**
  * Gets the current time as a struct tm. Thread-safe.
@@ -376,13 +472,16 @@ int log_init(void)
     }
 
     const char *env_log_file = getenv("LOG_FILE");
+    g_log_file_fallback = 0;
+    set_last_io_error(NULL);
+
     if (env_log_file != NULL && strlen(env_log_file) > 0) {
         g_log_file = fopen(env_log_file, "a");
         if (g_log_file == NULL) {
-            fprintf(stderr, "Failed to open log file '%s': %s\n",
-                    env_log_file, strerror(errno));
-            /* Fall back to stderr */
+            int err = errno;
+            report_open_failure(env_log_file, err);
             g_log_file = stderr;
+            g_log_file_fallback = 1;
         }
     } else {
         g_log_file = stderr;
@@ -526,13 +625,7 @@ void log_message(int level, const char *file, int line, const char *fmt, ...)
     }
 
     /* Write to output */
-    if (g_log_file != NULL) {
-        fputs(buffer, g_log_file);
-        fflush(g_log_file);
-    } else {
-        fputs(buffer, stderr);
-        fflush(stderr);
-    }
+    (void)write_log_line_locked(buffer);
 
     pthread_mutex_unlock(&log_mutex);
 
@@ -548,19 +641,36 @@ void log_message(int level, const char *file, int line, const char *fmt, ...)
  */
 void log_shutdown(void)
 {
+    FILE *to_close = NULL;
+    int flush_failed = 0;
+    int flush_err = 0;
+
     pthread_mutex_lock(&log_mutex);
 
     if (g_log_file != NULL && g_log_file != stderr) {
-        fflush(g_log_file);
-        fclose(g_log_file);
-        g_log_file = NULL;
+        to_close = g_log_file;
+        if (fflush(g_log_file) != 0) {
+            flush_failed = 1;
+            flush_err = errno;
+        }
+        g_log_file = stderr;
     }
-
-    g_log_level = LOG_LEVEL_NONE;
 
     pthread_mutex_unlock(&log_mutex);
 
-    fprintf(stderr, "Legacy logging subsystem shut down.\n");
+    if (flush_failed) {
+        LOG_WARN("legacy logger final flush failed (%s)", strerror(flush_err));
+    }
+    if (to_close != NULL) {
+        fclose(to_close);
+    }
+
+    LOG_INFO("Legacy logging subsystem shut down.");
+
+    pthread_mutex_lock(&log_mutex);
+    g_log_level = LOG_LEVEL_NONE;
+    g_log_file_fallback = 0;
+    pthread_mutex_unlock(&log_mutex);
 }
 
 /**
@@ -681,6 +791,20 @@ int log_assert(int condition, const char *expr, const char *file, int line)
                     "ASSERTION FAILED: %s", expr);
     }
     return !condition;
+}
+
+int log_uses_stderr_fallback(void)
+{
+    int fallback;
+    pthread_mutex_lock(&log_mutex);
+    fallback = g_log_file_fallback;
+    pthread_mutex_unlock(&log_mutex);
+    return fallback;
+}
+
+const char *log_last_io_error(void)
+{
+    return g_last_io_error[0] != '\0' ? g_last_io_error : NULL;
 }
 
 #ifdef TEST_LEGACY_LOGGER
