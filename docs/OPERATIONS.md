@@ -310,3 +310,17 @@ Audit logs are retained for 365 days and include:
 2. Update Kubernetes secret: `kubectl create secret tls tot-tls --cert=new.crt --key=new.key -n tent-production --dry-run=client -o yaml | kubectl apply -f -`
 3. Restart services: `kubectl rollout restart deployment -n tent-production`
 4. Verify new certificate: `openssl s_client -connect api.example.com:443 -servername api.example.com`
+
+### Frailbox Legacy Logger Fallback
+
+The frailbox legacy logger keeps running when `LOG_FILE` cannot be opened,
+written, or flushed. It emits an actionable diagnostic to `stderr`, switches
+the active output back to `stderr`, and preserves the log message that triggered
+the failure.
+
+Use this focused harness when changing logger file handling:
+
+```bash
+cd frailbox
+make test-logger-error-handling
+```

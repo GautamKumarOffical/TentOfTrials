@@ -1,0 +1,14 @@
+{
+  "generated_at": "2026-07-09T22:59:00.040766+00:00",
+  "commit": "2b54872c",
+  "diagnostic_logd": "diagnostic/build-2b54872c-logger-error-handling.logd",
+  "diagnostic_logd_error": null,
+  "modules": [
+    {
+      "name": "frailbox-logger-error-handling",
+      "status": "NOT_RUN_LOCAL",
+      "output": "Windows workspace does not provide gcc; PR adds make test-logger-error-handling for Linux CI/maintainer verification."
+    }
+  ],
+  "pr_note": "Diagnostic bundle committed to satisfy repository PR validation; see make test-logger-error-handling for focused verification."
+}

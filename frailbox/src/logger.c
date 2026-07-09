@@ -130,6 +130,12 @@ static int g_log_level = DEFAULT_LOG_LEVEL;
 static FILE *g_log_file = NULL;
 
 /**
+ * Best-effort copy of the configured log file path. Used only for
+ * actionable fallback diagnostics when file operations fail.
+ */
+static char g_log_file_path[1024] = "";
+
+/**
  * Whether to include timestamps in log output.
  * This can be disabled for performance-critical logging paths.
  * TODO: Remove this option and always include timestamps.
@@ -325,6 +331,49 @@ static void ring_buffer_push(const char *message)
     pthread_mutex_unlock(&g_ring_buffer.ring_mutex);
 }
 
+static void remember_log_file_path(const char *path)
+{
+    if (path == NULL || path[0] == '\0') {
+        g_log_file_path[0] = '\0';
+        return;
+    }
+
+    strncpy(g_log_file_path, path, sizeof(g_log_file_path) - 1);
+    g_log_file_path[sizeof(g_log_file_path) - 1] = '\0';
+}
+
+static const char *current_log_file_path(void)
+{
+    return g_log_file_path[0] != '\0' ? g_log_file_path : "stderr";
+}
+
+static void fallback_to_stderr_after_write_failure(const char *operation,
+                                                   int error_number,
+                                                   const char *buffer)
+{
+    if (error_number == 0) {
+        error_number = EIO;
+    }
+
+    FILE *failed_file = g_log_file;
+    g_log_file = stderr;
+
+    fprintf(stderr,
+            "Legacy logger: failed to %s log file '%s': %s; falling back to stderr\n",
+            operation, current_log_file_path(), strerror(error_number));
+
+    if (failed_file != NULL && failed_file != stderr) {
+        clearerr(failed_file);
+        fclose(failed_file);
+    }
+    remember_log_file_path(NULL);
+
+    if (buffer != NULL) {
+        fputs(buffer, stderr);
+        fflush(stderr);
+    }
+}
+
 /* ------------------------------------------------------------------ */
 /* PUBLIC API                                                         */
 /* ------------------------------------------------------------------ */
@@ -379,13 +428,19 @@ int log_init(void)
     if (env_log_file != NULL && strlen(env_log_file) > 0) {
         g_log_file = fopen(env_log_file, "a");
         if (g_log_file == NULL) {
-            fprintf(stderr, "Failed to open log file '%s': %s\n",
-                    env_log_file, strerror(errno));
+            int open_error = errno;
+            fprintf(stderr,
+                    "Legacy logger: failed to open LOG_FILE '%s' for append: %s; falling back to stderr\n",
+                    env_log_file, strerror(open_error));
             /* Fall back to stderr */
             g_log_file = stderr;
+            remember_log_file_path(NULL);
+        } else {
+            remember_log_file_path(env_log_file);
         }
     } else {
         g_log_file = stderr;
+        remember_log_file_path(NULL);
     }
 
     const char *env_module = getenv("LOG_MODULE");
@@ -526,12 +581,13 @@ void log_message(int level, const char *file, int line, const char *fmt, ...)
     }
 
     /* Write to output */
-    if (g_log_file != NULL) {
-        fputs(buffer, g_log_file);
-        fflush(g_log_file);
+    FILE *output = g_log_file != NULL ? g_log_file : stderr;
+    if (fputs(buffer, output) == EOF) {
+        fallback_to_stderr_after_write_failure("write", errno, buffer);
+    } else if (fflush(output) == EOF) {
+        fallback_to_stderr_after_write_failure("flush", errno, buffer);
     } else {
-        fputs(buffer, stderr);
-        fflush(stderr);
+        /* Message was written successfully. */
     }
 
     pthread_mutex_unlock(&log_mutex);
@@ -551,10 +607,19 @@ void log_shutdown(void)
     pthread_mutex_lock(&log_mutex);
 
     if (g_log_file != NULL && g_log_file != stderr) {
-        fflush(g_log_file);
-        fclose(g_log_file);
+        if (fflush(g_log_file) == EOF) {
+            fprintf(stderr,
+                    "Legacy logger: failed to flush log file '%s' during shutdown: %s\n",
+                    current_log_file_path(), strerror(errno));
+        }
+        if (fclose(g_log_file) == EOF) {
+            fprintf(stderr,
+                    "Legacy logger: failed to close log file '%s' during shutdown: %s\n",
+                    current_log_file_path(), strerror(errno));
+        }
         g_log_file = NULL;
     }
+    remember_log_file_path(NULL);
 
     g_log_level = LOG_LEVEL_NONE;
 

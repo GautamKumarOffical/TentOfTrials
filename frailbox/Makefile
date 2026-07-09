@@ -8,6 +8,7 @@ LDFLAGS = -pie -z relro -z now
 SRCDIR = src
 INCDIR = include
 BUILDDIR = build
+TESTDIR = tests
 
 SRCS = $(wildcard $(SRCDIR)/*.c) main.c
 OBJS = $(patsubst %.c, $(BUILDDIR)/%.o, $(SRCS))
@@ -37,7 +38,12 @@ distclean: clean
 test: $(TARGET)
 	./$(TARGET) --sandbox-type seccomp --memory-limit 64 --verbose
 
+test-logger-error-handling:
+	@mkdir -p $(BUILDDIR)/tests
+	$(CC) $(CFLAGS) -I$(INCDIR) $(TESTDIR)/test_logger_error_handling.c $(SRCDIR)/logger.c -o $(BUILDDIR)/tests/test_logger_error_handling -lpthread
+	./$(BUILDDIR)/tests/test_logger_error_handling
+
 valgrind: $(TARGET)
 	valgrind --leak-check=full --show-leak-kinds=all ./$(TARGET)
 
-.PHONY: all clean distclean test valgrind
+.PHONY: all clean distclean test test-logger-error-handling valgrind
